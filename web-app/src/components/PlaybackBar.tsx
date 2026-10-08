@@ -1,6 +1,10 @@
 import React from 'react';
 import './PlaybackBar.css';
 
+/** Estremi dello slider, in battute al minuto. */
+const BPM_MIN = 40;
+const BPM_MAX = 240;
+
 interface PlaybackBarProps {
   isPlaying: boolean;
   isTakeActive: boolean;
@@ -9,6 +13,10 @@ interface PlaybackBarProps {
   onPlayPause: () => void;
   onStop: () => void;
   onPlayAlong: () => void;
+  /** Battute al minute scelte, e quelle scritte nello spartito. */
+  bpm: number;
+  scoreBpm: number;
+  onBpmChange: (bpm: number) => void;
 }
 
 /** Stopwatch SVG — the play-along button */
@@ -47,7 +55,12 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
   onPlayPause,
   onStop,
   onPlayAlong,
+  bpm,
+  scoreBpm,
+  onBpmChange,
 }) => {
+  const slowed = bpm < scoreBpm;
+
   return (
     <div className="playback-bar" id="playback-bar">
       {/* Thin progress line at the top of the pill */}
@@ -106,6 +119,33 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         <PlayAlongIcon />
         <span className="bar-btn-label">{isTakeActive ? 'In corso' : 'Suona insieme'}</span>
       </button>
+
+      {/* Tempo. Sparisce durante la prova, e non è solo disabilitato: durante
+          la prova il fattore che il verdetto usa è già stato letto, e lasciare
+          un cursore che sembra regolabile ma non conta sarebbe peggio che
+          non averlo. */}
+      {!isTakeActive && (
+        <div className="bar-tempo">
+          <input
+            type="range"
+            className="bar-tempo-slider"
+            min={BPM_MIN}
+            max={BPM_MAX}
+            step={1}
+            value={bpm}
+            disabled={isLoading}
+            onChange={(e) => onBpmChange(Number(e.target.value))}
+            aria-label="Tempo in battute al minuto"
+            aria-valuetext={`${bpm} battute al minuto`}
+            id="bar-bpm-slider"
+          />
+          <span className="bar-tempo-value">
+            {bpm}
+            <span className="bar-tempo-unit">BPM</span>
+          </span>
+          {slowed && <span className="bar-tempo-note">da {scoreBpm}</span>}
+        </div>
+      )}
     </div>
   );
 };

@@ -63,9 +63,19 @@ describe('payload del frontend -> servizio', () => {
   it('produce esattamente i campi che server.py valida', () => {
     // Se un nome cambiasse qui, server.py risponderebbe 400 e la pagina
     // mostrerebbe "nessuna nota registrata", senza dire quale campo manca.
-    expect(Object.keys(out).sort()).toEqual(['control_changes', 'notes']);
+    // tempo_factor e' l'unico campo che non riguarda le note: e' la scala con
+    // cui il servizio riporta i tempi su quello che l'utente ha scelto.
+    expect(Object.keys(out).sort()).toEqual(['control_changes', 'notes', 'tempo_factor']);
     for (const n of out.notes) expect(Object.keys(n).sort()).toEqual(['dur_ms', 'pitch', 'time_ms', 'velocity']);
     for (const c of out.control_changes) expect(Object.keys(c).sort()).toEqual(['controller', 'time_ms', 'value']);
+  });
+
+  it('il fattore di tempo viaggia al servizio', () => {
+    // 155 -> 80 e' 1,9375: il brano suona a meta' velocita' e ogni millisecondo
+    // scritto nello spartito vale quasi due millisecondi reali.
+    expect(toPerformance(toEvents(src.notes)).tempo_factor).toBe(1);
+    expect(toPerformance(toEvents(src.notes), 155 / 80).tempo_factor).toBeCloseTo(1.9375, 6);
+    expect(toPerformance(toEvents(src.notes), 1).tempo_factor).toBe(1);
   });
 
   it('il corpo inviato e\' JSON serializzabile senza circoli', () => {

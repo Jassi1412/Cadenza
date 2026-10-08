@@ -5,9 +5,8 @@ import type { MidiEvent } from './useMidi';
  * Trasforma il flusso MIDI in esecuzione da mandare al servizio, e ne legge i
  * sette verdetti. Il verdetto NON e' calcolato qui: viene da RML.
  *
- * Il servizio ricostruisce il MIDI (pymatchmaker vuole un file, non eventi),
- * allinea e ci mette dentro le aspettative dello spartato. Qui si fa solo
- * trasporto.
+ * Il servizio legge lo spartito, costruisce la mappa dei tempi da quello che e'
+ * scritto e ci mette dentro le aspettazioni. Qui si fa solo trasporto.
  */
 
 /**
@@ -48,6 +47,8 @@ export type VerdictMap = Record<string, Verdict>;
 export interface PerformancePayload {
   notes: PerformedNote[];
   control_changes: ControlChange[];
+  /** ms reali per ms scritti nello spartito: 1 al tempo originale, 2 a meta' */
+  tempo_factor: number;
 }
 
 /** Soglia sotto la quale una nota non e' mai stata suonata davvero. */
@@ -78,7 +79,10 @@ function isNoteOff(event: MidiEvent): boolean {
  * L'allineatore ricava la scala dal fondo, quindi l'origine non conta. Passare
  * a tempo assoluto serve solo se un giorno dovessi confrontare due prove.
  */
-export function toPerformance(events: readonly MidiEvent[]): PerformancePayload {
+export function toPerformance(
+  events: readonly MidiEvent[],
+  tempoFactor = 1.0,
+): PerformancePayload {
   const notes: PerformedNote[] = [];
   const control_changes: ControlChange[] = [];
 
@@ -104,9 +108,19 @@ export function toPerformance(events: readonly MidiEvent[]): PerformancePayload 
       if (queue && queue.length === 0) pending.delete(pitch);
       if (attack === undefined) continue; // note-off senza attacco: nulla da chiudere
       const dur = event.timestamp - attack.time_ms;
-      if (dur >= MIN_DURATION_MS) {
-        notes.push({ time_ms: attack.time_ms, dur_ms: dur, pitch, velocity: attack.velocity });
-      }
+      // La nota entra anche se e' stata tenuta pochissimo.
+      //
+      // Qui prima c'era un filtro: sotto i 30 ms la nota non veniva registrata.
+      // Ma allora non era la regola di verdetto a non segnalarla, era proprio
+      // l'assenza dell'evento: nessuna soglia, dentro o fuori, poteva vederla.
+      // E non era solo un caso, perche' due tasti premuti insieme a pugni chiusi
+      // si presentano spesso come due note da pochi millisecondi, e quelle
+      // sparivano.
+      //
+      // Ora il dato arriva col suo valore vero, e a confrontarlo con la soglia
+      // e' la regola, che e' l'unica cosa che deve decidere quanto si puo' stare
+      // sotto un tasto.
+      notes.push({ time_ms: attack.time_ms, dur_ms: dur, pitch, velocity: attack.velocity });
       continue;
     }
 
@@ -129,7 +143,7 @@ export function toPerformance(events: readonly MidiEvent[]): PerformancePayload 
 
   notes.sort((a, b) => a.time_ms - b.time_ms);
   control_changes.sort((a, b) => a.time_ms - b.time_ms);
-  return { notes, control_changes };
+  return { notes, control_changes, tempo_factor: tempoFactor };
 }
 
 interface PendingAttack {
@@ -144,7 +158,7 @@ export interface UseVerdictReturn {
   verdicts: VerdictMap | null;
   error: string | null;
   noteCount: number;
-  analyse: (scoreXml: string) => Promise<void>;
+  analyse: (scoreXml: string, tempoFactor?: number) => Promise<void>;
   reset: () => void;
 }
 
@@ -158,9 +172,9 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [noteCount, setNoteCount] = useState(0);
   const busy = useRef(false);
 
-  const analyse = useCallback(async (scoreXml: string) => {
+  const analyse = useCallback(async (scoreXml: string, tempoFactor = 1.0) => {
     if (busy.current) return;
-    const { notes, control_changes } = toPerformance(events);
+    const { notes, control_changes, tempo_factor } = toPerformance(events, tempoFactor);
     if (notes.length === 0) {
       setError('Nessuna nota registrata: suona il brano prima di chiedere il verdetto.');
       setStatus('error');
@@ -174,7 +188,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score: scoreXml, notes, control_changes }),
+        body: JSON.stringify({ score: scoreXml, notes, control_changes, tempo_factor }),
       });
       const payload = await response.json();
       if (!response.ok) {

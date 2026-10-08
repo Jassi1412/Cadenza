@@ -42,9 +42,20 @@ describe('toPerformance', () => {
     expect(notes).toEqual([]);
   });
 
-  it('butta i duri come rumore da tastiera', () => {
+  it('un tasto tenuto poco arriva comunque, con la durata vera', () => {
+    // Prima questa nota veniva scartata qui, e quindi non finiva nella traccia:
+    // non era la regola a non segnalarla, era l'assenza dell'evento. Ora passa,
+    // col suo valore vero, e a confrontarlo con i 30 ms e' la regola.
     const { notes } = toPerformance([on(0, 60, 90), off(5, 60)]);
-    expect(notes).toEqual([]);
+    expect(notes).toEqual([{ time_ms: 0, dur_ms: 5, pitch: 60, velocity: 90 }]);
+  });
+
+  it('un tasto premuto e mai rilasciato riceve il minimo di 30 ms', () => {
+    // Caso diverso e dichiarato: qui il dato non c'e'. La durata e' inventata
+    // dal browser per non lasciare la nota appesa, quindi la regola su questo
+    // caso non puo' pronunciarsi.
+    const { notes } = toPerformance([on(0, 60, 90)]);
+    expect(notes).toEqual([{ time_ms: 0, dur_ms: 30, pitch: 60, velocity: 90 }]);
   });
 
   it('ordina note e control change per tempo', () => {

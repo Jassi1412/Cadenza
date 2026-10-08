@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
+import { METRIC_LABELS } from '../metrics';
 import PlaybackBar from '../components/PlaybackBar';
 import './ScorePage.css';
 
@@ -11,16 +12,37 @@ let Player: any = null;
 let OpenSheetMusicDisplayRenderer: any = null;
 let VerovioConverter: any = null;
 
-/** Nomi leggibili delle sette metriche. La chiave è il nome del file .rml. */
-const METRIC_LABELS: Record<string, string> = {
-  articulation: 'Articolazione',
-  'chord-jitter': 'Sincronia degli accordi',
-  'dynamics-adherence': 'Adesione alla dinamica',
-  'pedal-toggle': 'Pedale',
-  'pitch-agreement': 'Corrispondenza delle altezze',
-  'pitch-range': 'Estensione',
-  'syncopated-pedal': 'Pedale sincopato',
-};
+/** Se lo spartito non dichiara un tempo, si parte da qui. */
+const BPM_FALLBACK = 120;
+
+/**
+ * Il tempo scritto nello spartito, in battute al minuto.
+ *
+ * Lo slider deve mostrare i BPM e non un moltiplicatore: un musicista che
+ * rallenta per imparare una parte ragiona in battute al minuto, e il numero
+ * che vede è confrontabile con quello di qualsiasi altro brano.
+ *
+ * `<sound tempo>` è la dichiarazione esplicita; se manca si prova il metronomo.
+ * Se non c'è nemmeno quello si torna a un valore plausibile: peggio un numero
+ * approssimato che uno slider che non parte.
+ *
+ * Nei brani con cambi di tempo si prende il primo. Lo slider scala tutta la
+ * durata dello stesso fattore, quindi i rallentamenti interni restano: è il
+ * tempo di apertura quello che l'utente vede.
+ */
+function readScoreBpm(scoreXml: string): number {
+  const sound = /<sound\b[^>]*\btempo="([^"]+)"/.exec(scoreXml);
+  if (sound) {
+    const bpm = Number(sound[1]);
+    if (Number.isFinite(bpm) && bpm > 0) return Math.round(bpm);
+  }
+  const perMinute = /<per-minute>([^<]+)<\/per-minute>/.exec(scoreXml);
+  if (perMinute) {
+    const bpm = Number(perMinute[1]);
+    if (Number.isFinite(bpm) && bpm > 0) return Math.round(bpm);
+  }
+  return BPM_FALLBACK;
+}
 
 /**
  * Fasi della prova.
@@ -71,6 +93,10 @@ const ScorePage: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [phase, setPhase] = useState<Phase>('idle');
   const [count, setCount] = useState(3);
+  // Tempo scelto dall'utente, in battute al minuto, e quello scritto nello
+  // spartito. Il secondo serve solo per ricavare il fattore.
+  const [scoreBpm, setScoreBpm] = useState(BPM_FALLBACK);
+  const [bpm, setBpm] = useState(BPM_FALLBACK);
 
   const file = location.state?.file as File | undefined;
   const midiEnabled = location.state?.midiEnabled as boolean | undefined;
@@ -87,11 +113,11 @@ const ScorePage: React.FC = () => {
     if (!file) return;
     try {
       const scoreXml = await file.text();
-      await verdict.analyse(scoreXml);
+      await verdict.analyse(scoreXml, scoreBpm / bpm);
     } catch (err) {
       console.error('[ScorePage] Non sono riuscito a leggere lo spartito:', err);
     }
-  }, [file, verdict]);
+  }, [file, verdict, scoreBpm, bpm]);
 
   // Il verdetto arriva da solo, a fine brano, mentre l'attenzione è sullo
   // spartito: senza questo il pannello si aprirebbe sotto la piega e sembrerebbe
@@ -256,6 +282,13 @@ const ScorePage: React.FC = () => {
           font: 'Bravura'
         });
 
+        // Il tempo scritto nello spartito decide il valore iniziale dello slider: chi
+        // preme play sente il brano come e' scritto, e chi vuole rallentare lo
+        // fa apposta.
+        const written = readScoreBpm(await file.text());
+        setScoreBpm(written);
+        setBpm(written);
+
         // Create the player
         const player = await Player.create({
           musicXml: arrayBuffer,
@@ -316,6 +349,24 @@ const ScorePage: React.FC = () => {
   }, [file, navigate]);
 
   // ── Playback Controls ──────────────────────────────
+
+  /**
+   * Lo slider cambia solo il fattore di riascolto. Non ricostruisce il MIDI:
+   * il player lo converte una volta sola al caricamento, e i tempi che ci sono
+   * dentro restano quelli del tempo scritto. Per questo chi imposta un tempo
+   * diverso da quello di apertura non ottiene lo spartito riscritto, ottiene lo
+   * stesso spartito riprodotto piu' piano — che e' quello che serve, e molto
+   * meno caro.
+   *
+   * Il tempo non si tocca durante la prova: il fattore che va al servizio
+   * viene letto una volta sola, all'inizio, e se cambiasse a metà il verdetto
+   * sarebbe calcolato con una scala sbagliata per tutta la seconda parte.
+   */
+  useEffect(() => {
+    if (phase === 'playing' || phase === 'countdown') return;
+    const player = playerRef.current;
+    if (player) player.velocity = bpm / scoreBpm;
+  }, [bpm, scoreBpm, phase]);
 
   const handlePlayPause = useCallback(() => {
     const player = playerRef.current;
@@ -450,6 +501,9 @@ const ScorePage: React.FC = () => {
           onPlayPause={handlePlayPause}
           onStop={handleStop}
           onPlayAlong={handlePlayAlong}
+          bpm={bpm}
+          scoreBpm={scoreBpm}
+          onBpmChange={setBpm}
         />
       )}
     </div>
