@@ -6,6 +6,8 @@ import {
   ZELDA_PERFORMANCE,
   ZELDA_SCORE_URL,
   ZELDA_TEMPO_FACTOR,
+  ZELDA_WRITTEN_MS,
+  ZELDA_WRITTEN_REPEAT_MS,
 } from '../data/zelda-performance';
 import './ZeldaPage.css';
 import './ScorePage.css';
@@ -131,16 +133,22 @@ const ZeldaPage: React.FC = () => {
           reali di una prova al pianoforte, non simulati. Il bottone la manda al
           monitor RML e restituisce i verdetti.
         </p>
+        <p className="verdict-note">
+          Lo spartito al tempo scritto (155 BPM) dura {(ZELDA_WRITTEN_MS / 1000).toFixed(1)} s,
+          {' '}{(ZELDA_WRITTEN_REPEAT_MS / 1000).toFixed(1)} s col ritornello. La registrazione
+          qui sotto è una prova reale suonata al 129% del tempo scritto: dura{' '}
+          {(DURATION_S).toFixed(1)} s.
+        </p>
       </header>
 
       <ul className="zelda-stats">
         <li>
           <span className="zelda-stat-value">{notes.length}</span>
-          <span className="zelda-stat-label">note</span>
+          <span className="zelda-stat-label">note registrate</span>
         </li>
         <li>
-          <span className="zelda-stat-value">{DURATION_S.toFixed(1)} s</span>
-          <span className="zelda-stat-label">durata</span>
+          <span className="zelda-stat-value">{(DURATION_S).toFixed(1)} s</span>
+          <span className="zelda-stat-label">durata registrazione</span>
         </li>
         <li>
           <span className="zelda-stat-value">
@@ -194,6 +202,14 @@ const ZeldaPage: React.FC = () => {
           {status === 'done' && verdicts && (
             <>
               <p className="verdict-note">{notes.length} note analizzate</p>
+              {verdicts['syncopated-pedal'] && !verdicts['syncopated-pedal'].ok && (
+                <p className="verdict-note">
+                  Il pedale sincopato suona la nota e preme subito dopo: la specifica
+                  riscritta (nel repository, non ancora sul servizio) accetta questa
+                  esecuzione — verificato in locale, exit 0. Il servizio deployato
+                  compila ancora la versione precedente, che la conta come violazione.
+                </p>
+              )}
               <ul className="verdict-list">
                 {Object.entries(verdicts).map(([key, v]) => (
                   <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
