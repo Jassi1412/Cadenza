@@ -36,12 +36,14 @@
 noteOn(num, dist) matches
     {type:'noteon', note:{number:num}, expected:{pitchDist:dist}};
 
-// NOTA SULLA SINTASSI: scrivere `with dist == 0` NON funziona. Il compilatore
-// lo traduce in {(Dist =:= 0)}, e `=:=` e' aritmetica Prolog, non CLP(Q):
-// dentro le graffe viene valutata subito, mentre Dist non e' ancora legato da
-// deep_subdict. Il predicato fallisce su tutte le note, e la specifica boccia
-// anche la traccia buona. L'uguaglianza si scrive con i due operatori di
-// disuguaglianza, che il compilatore emette come vincoli CLP(Q) differiti.
+// NOTA SULLA SINTASSI: l'uguaglianza qui e' scritta come due disuguaglianze.
+// La forma `with dist == 0` compila in {(Dist =:= 0)}, aritmetica Prolog, e
+// con il compilatore e il monitor attuali FUNZIONA lo stesso (verificato:
+// traccia ok accettata, traccia fail bocciata, identico esito). Si tiene la
+// forma con >= e <= perche' e' un vincolo CLP(Q) come quelli delle altre
+// metriche: stesso risolutore, stesso comportamento, una forma sola da
+// conoscere. Una versione precedente di questa nota diceva che == boccia
+// anche la traccia buona: non si riproduce piu'.
 inScore(num) matches noteOn(num, dist) with dist >= 0 && dist <= 0;
 
 // alias a zero argomenti: senza questo, Main che scrive `inScore` sta
@@ -58,12 +60,13 @@ unmatchedNote matches noteOn(_, null);
 // >> li scarta: questa metrica guarda solo gli attacchi.
 anyNoteOn matches {type:'noteon'};
 
-// ORDINE DELLE ALTERNATIVE. unmatchedNote va PRIMA di inScore. Prolog prova le
-// alternative nell'ordine in cui sono scritte e non indietreggia dopo un
-// errore: se inScore fosse provata per prima, su una nota senza corrispondenza
-// in partitura riceverebbe Dist = null e la costruzione {Dist >= 0} solleverebbe
-// "Type error: clpr_expression expected, found null". Il verdetto restava
-// corretto perche' il monitor recupera e passa all'alternativa successiva, ma
-// l'errore sporca stderr e faceva abortare la suite. Qualsiasi costruzione
-// `with` va protetta dal valore null: va trattata prima, non dopo.
+// ORDINE DELLE ALTERNATIVE. unmatchedNote sta prima di inScore per abitudine
+// difensiva: il valore null si tratta prima che un vincolo numerico possa
+// toccarlo. Con il monitor attuale anche l'ordine inverso da' lo stesso
+// verdetto e nessun errore su stderr (verificato scambiando i due rami sulla
+// traccia ok, che contiene eventi con pitchDist null). Una versione
+// precedente di questa nota diceva che l'ordine inverso sollevava
+// "Type error: clpr_expression expected, found null" e faceva abortare la
+// suite: non si riproduce piu', ma tenere il null per primo non costa nulla
+// e protegge se il monitor cambia.
 Main = anyNoteOn >> (unmatchedNote \/ inScore)*;

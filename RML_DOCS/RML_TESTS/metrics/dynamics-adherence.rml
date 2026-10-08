@@ -4,24 +4,38 @@
 //
 // Il campo expected.dyn arriva dal JOIN (alignment/join.py): e' la velocity
 // MIDI della dinamica che copre la battuta in cui la nota e' caduta, secondo
-// l'allineamento con lo spartito. expected.dynExplicit dice se quel valore
-// e' scritto nello spartito o e' un fallback: senza di questo non si puo'
-// distinguere "suoni piano" da "qui non c'e' niente scritto".
+// l'allineamento con lo spartito. Quando lo spartito in quel punto non scrive
+// niente, expected.dyn e' vuoto e expected.dynExplicit e' falso.
+//
+// Serve un interruttore e non il vuoto perche' in RML non si puo' chiedere se un
+// campo e' un numero oppure e' vuoto: si puo' chiedere solo se un interruttore e'
+// vero o falso. Senza questo, il campo dyn aggancerebbe anche il vuoto e il
+// vincolo numerico qui sotto riceverebbe un valore su cui non puo' decidere.
 //
 // Il JOIN non giudica nulla. Mette a confronto i numeri e lascia che sia
 // questa specifica a dire se la differenza e' accettabile. Cambiare la
 // tolleranza e' cambiare la constante qui sotto, non ricompilare Python.
 //
-// Tolleranza: una nota e' troppo leggera se suona sotto il 70% della dinamica
-// attesa. Il 30% di margine serve perche' su un pianoforte reale nessuno
-// rispetta un livello notato al grammo.
+// Tolleranza: ogni dinamica ha una fascia fitta di 16 valori MIDI, centrata sul
+// numero che le assegna la tabella e larga meta' della distanza fra una
+// dinamica e la successiva. La larghezza e' la stessa per tutte: e' quello che
+// distingue una dinamica dall'altra. Con una fascia proporzionale al valore, le
+// dinamiche del registro basso si sovrapporrebbero e un pp non si distinguerebbe
+// da un p.
+//
+// La larghezza scelta e' 8 per lato, non tarata su esecuzioni reali: nel
+// repository non c'e' nessuna traccia con velocita' vere. Cambiare la fascia e'
+// cambiare l'8 qui e nel punto sotto.
 
 markedNote(num, vel, dyn) matches
     {type:'noteon', note:{number:num, rawAttack:vel},
      expected:{dynExplicit:true, dyn:dyn}};
 
 // Il cuore della regola: il vincolo numerico di RML, risolto da CLP(Q).
-inAdherence(num, vel, dyn) matches markedNote(num, vel, dyn) with 0.7 * dyn <= vel;
+// Due lati, non uno: anche una nota suonata piu' forte del dovuto e' un difetto.
+// I due vincoli si uniscono con `&&`: nel `with` la virgola non e' una congiunzione.
+inAdherence(num, vel, dyn) matches markedNote(num, vel, dyn)
+    with dyn - 8 <= vel && vel <= dyn + 8;
 
 inAdherence matches inAdherence(_, _, _);
 

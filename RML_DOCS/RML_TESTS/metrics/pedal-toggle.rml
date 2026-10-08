@@ -1,36 +1,67 @@
 // Metric: pedal-toggle
-// FR-003: il pedale sustain viene premuto e rilasciato, e ogni pressione
-// deve essere chiusa da un rilascio.
+// FR-003 FORTE. Ogni volta che lo spartito apre un pedale di risonanza, la
+// traccia deve mostrare una pressione esattamente dove quello span comincia e
+// un rilascio esattamente dove lo span termina. Non basta che la coppia sia
+// ben formata: deve cadere sui due bordi dello span che la giustifica.
 //
 // Il controller 64 non e' cablato a caso: e' il sustain definito dallo standard
-// MIDI General MIDI, lo stesso su ogni tastiera. E' l'unico numero che ha
-// diritto di stare qui dentro.
+// General MIDI, che in italiano e' il pedale di risonanza, lo stesso su ogni
+// tastiera. E' l'unico numero che ha diritto di stare qui dentro.
 //
-// LA PRESSIONE DEVE CADERE DOVE LO SPARTITO CHIEDE IL PEDALE. Il JOIN annota
-// ogni controlchange con expected.pedal, che vale true quando lo spartito ha un
-// <pedal> attivo in quel punto. Una pressione fuori da li' e' premuta senza
-// che la partitura la chieda, e questa specifica la segnala.
+// GLI ESTREMI DELLO SPAN. Il JOIN annota ogni controlchange con lo span di
+// pedale a cui si riferisce: expected.spanStart e expected.spanEnd, presi dai
+// <pedal> dello spartito (alignment/join.py). Alla pressione assegna lo span
+// che APRE in quella battuta, al rilascio lo span che CHIUDE. Se in quel punto
+// lo spartito non apre o chiude niente, expected.spanExplicit e' falso.
+//
+// Serve un interruttore e non il vuoto perche' in RML non si puo' chiedere se
+// un campo e' un numero oppure e' vuoto: si puo' chiedere solo se un
+// interruttore e' vero o falso. Senza questo, il vincolo numerico qui sotto
+// riceverebbe un valore su cui non puo' decidere.
+//
+// PERCHE' SOLO LA POSIZIONE. Il vincolo e' sulla battuta in cui l'evento cade,
+// non sull'ordine rispetto alle note: se il pianista preme prima dell'attacco
+// o subito dopo, e' lo stesso istante musicale. L'ordine e' affare di
+// syncopated-pedal.rml; qui si chiede solo che pressione e rilascio stiano
+// sui due bordi dello span.
 //
 // Ogni evento e' uno di tre: un evento che non riguarda il pedale, una
-// pressione-rilascio chiusa, o ... nient'altro. Non esiste il caso "pressione
-// senza rilascio": una pressione accettata da sola lascerebbe il pedale
-// premuto per sempre, che e' esattamente il difetto che questa metrica cerca.
+// pressione-rilascio chiusa sui bordi giusti, o ... nient'altro. Non esiste
+// il caso "pressione senza rilascio": una pressione accettata da sola
+// lascerebbe il pedale premuto per sempre, che e' esattamente il difetto che
+// questa metrica cerca.
 
-anyCC64(ctrl, val) matches {type:'controlchange', controller:ctrl, value:val};
+// La pressione: controller 64 a 127, in una battuta che coincide con
+// l'inizio dello span che la giustifica.
+pedalPressSpan(b, s) matches
+    {type:'controlchange', controller:64, value:127,
+     position:{beat:b}, expected:{spanExplicit:true, spanStart:s}};
+pedalPress matches pedalPressSpan(b, s) with abs(b - s) <= 0.25;
 
-// alias a zero argomenti: serve per il filtro sotto
+// Il rilascio: controller 64 a 0, in una battuta che coincide con la fine
+// dello span che la pressione aveva aperto.
+pedalReleaseSpan(b, e) matches
+    {type:'controlchange', controller:64, value:0,
+     position:{beat:b}, expected:{spanExplicit:true, spanEnd:e}};
+pedalRelease matches pedalReleaseSpan(b, e) with abs(b - e) <= 0.25;
+
+// La tolleranza di un quarto di battuta copre l'arrotondamento del JOIN: gli
+// eventi reali non cadono mai al millisecondo sul bordo, e chiedere
+// uguaglianza esatta boccerebbe anche le esecuzioni corrette.
+
+// Il controller e' vincolato a 64 qui dentro: senza, `anyCC64` aggancerebbe
+// qualunque controlchange e una pressione su un altro comando finirebbe
+// trattata come se fosse pedale.
+anyCC64(ctrl, val) matches {type:'controlchange', controller:64, value:val};
 anyCC64 matches anyCC64(_, _);
 
-// un pressione che lo spartito NON prescrive
+// un evento che non riguarda il pedale
 other not matches anyCC64;
 
-pedalPress matches anyCC64(64, 127);
-pedalRelease matches anyCC64(64, 0);
-
-// NotA: l'obbligo "premi dove lo spartito chiede" non e' esprimibile qui dentro.
-// Una specifica guardando un solo flusso non puo' dire che un evento manca: puo'
-// solo dire che quelli presenti sono leciti o che sono illegali. Quell'obbligo
-// sta in syncopated-pedal.rml, che ha un modo per chiederlo.
+// NotA: l'obbligo "premi dove lo spartito chiede" non e' esprimibile qui
+// dentro. Una specifica guardando un solo flusso non puo' dire che un evento
+// manca: puo' solo dire che quelli presenti sono leciti o che sono illegali.
+// Quell'obbligo sta in syncopated-pedal.rml, che ha un modo per chiederlo.
 
 // Tra la pressione e il rilascio puo' passare tutto quello che vuoi: uno span
 // di pedale copre in media sei note, e su questo brano arriva a coprirne

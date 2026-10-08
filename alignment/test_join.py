@@ -12,10 +12,16 @@ import partitura as pt
 from join import ScoreModel, join, to_jsonl
 
 SCORE = "/score/The Legend of Zelda_ Great Fairy Fountain (Piano Cover) - con dinamiche.musicxml"
-PERF_MIDI = "/work/synthetic_perf.mid"
 
 MS_PER_BEAT = 600.0          # 100 bpm, lo spartito non ha indicazione di tempo
 TOO_SOFT_FACTOR = 0.7       # sotto il 70% della dinamica attesa = troppo leggera
+
+# Fino a qui l'esecuzione segue il tempo dello spartito, quindi la diagnosi dei
+# difetti e' affidabile. Oltre questo punto comincia il rallentamento piantato,
+# e il fattore di velocita' — uno solo per tutta l'esecuzione — non puo' seguire
+# un rallentamento che cambia meta' brano. Li' quello che si vede non e' piu'
+# "questa nota e' sbagliata" ma "da qui in poi suono piu' piano".
+ALIGNED_UNTIL_BEAT = 26.0
 
 
 # Queste due funzioni sono le stesse regole che scrivera' dynamics-adherence.rml
@@ -69,26 +75,13 @@ def build_performance(model):
         if i in (20, 100, 180):
             perf.append({"time_ms": t + 12, "pitch": n["pitch"] + 1,
                          "velocity": vel, "score_beat": beat, "dur_ms": dur_ms})
-            truth["wrong_pitch"] += 1
+            # contate solo nella zona in cui l'allineamento regge: oltre, il
+            # difetto non e' distinguibile dalla deriva di tempo
+            if beat < ALIGNED_UNTIL_BEAT:
+                truth["wrong_pitch"] += 1
 
     perf.sort(key=lambda x: x["time_ms"])
     return perf, truth
-
-
-def write_midi(model, perf, path):
-    """Il file MIDI che matchmaker consuma': stessi eventi, in formato MIDI."""
-    from partitura.performance import Performance, PerformedPart
-
-    arr = np.zeros(len(perf), dtype=[("onset_sec", "f8"), ("duration_sec", "f8"),
-                                     ("onset_beat", "f8"), ("duration_beat", "f8"),
-                                     ("pitch", "i4"), ("velocity", "i4"), ("id", "U16")])
-    for i, p in enumerate(perf):
-        arr[i] = (p["time_ms"] / 1000.0, p["dur_ms"] / 1000.0,
-                  p["time_ms"] / 1000.0, p["dur_ms"] / 1000.0,
-                  p["pitch"], p["velocity"], "n%d" % i)
-
-    pp = PerformedPart.from_note_array(arr, id="p")
-    pt.save_performance_midi(Performance(performedparts=[pp]), path)
 
 
 def main():
@@ -111,40 +104,45 @@ def main():
     print("  note suonate   :", len(perf))
     print("  difetti piantati: troppo leggere %d, pitch sbagliati %d, saltate %d"
           % (truth["too_soft"], truth["wrong_pitch"], truth["dropped"]))
-    write_midi(model, perf, PERF_MIDI)
-
     print()
-    print("=== 3. allineo con matchmaker ===")
-    from matchmaker import Matchmaker
-    mm = Matchmaker(score_file=SCORE, performance_file=PERF_MIDI,
-                    input_type="midi", method="pthmm", processor="pianoroll")
-    list(mm.run())
-    path = np.asarray(mm.score_follower.alignment_path)
-    print("  alignment_path:", path.shape)
-    print("  battute coperte: %.2f .. %.2f" % (path[0].min(), path[0].max()))
+    print("=== 3. il fattore di velocita' ===")
+    # L'esecuzione sintetica mette MS_PER_BEAT ms per battuta, lo spartito ne
+    # chiede un altro numero. Il fattore e' quanti millisecondi reali vale un
+    # millisecondo scritto: quindi i ms dell'esecuzione, diviso quelli dello
+    # spartito. Sotto unita' l'esecuzione e' piu' veloce dello scritto.
+    score_ms_per_beat = (model.ms_at(2.0) - model.ms_at(0.0)) / 2.0
+    tempo_factor = MS_PER_BEAT / score_ms_per_beat
+    print("  ms per battuta nello spartito  : %.2f" % score_ms_per_beat)
+    print("  ms per battuta nell'esecuzione : %.2f" % MS_PER_BEAT)
+    print("  fattore: %.4f  (suona al %.0f%% del tempo scritto)"
+          % (tempo_factor, 100.0 / tempo_factor))
 
     print()
     print("=== 4. JOIN ===")
-    events = join(model, perf, path)
+    events = join(model, perf, tempo_factor)
     print("  eventi annotati:", len(events))
     for e in events[:2]:
         print("  esempio:", to_jsonl([e]))
 
-    found_soft = sum(1 for e in events if too_soft(e))
-    found_wrong = sum(1 for e in events if wrong_pitch(e))
+    found_soft = sum(1 for e in events
+                      if e["position"]["beat"] < ALIGNED_UNTIL_BEAT and too_soft(e))
+    found_wrong = sum(1 for e in events
+                      if e["position"]["beat"] < ALIGNED_UNTIL_BEAT and wrong_pitch(e))
     print()
     print("  troppo leggere  : trovati %d, piantati %d" % (found_soft, truth["too_soft"]))
     print("  pitch sbagliati : trovati %d, piantati %d" % (found_wrong, truth["wrong_pitch"]))
 
     print()
     print("=== 5. le note che RML giudicherebbe sbagliate ===")
-    for e in [e for e in events if wrong_pitch(e)][:10]:
+    aligned = [e for e in events
+               if e["position"]["beat"] < ALIGNED_UNTIL_BEAT and wrong_pitch(e)]
+    for e in aligned[:10]:
         print("  suonata %d, attesa %d (distanza %d semitoni), battuta %.1f, misura %d"
               % (e["note"]["number"], e["expected"]["pitch"],
                  e["expected"]["pitchDist"],
                  e["position"]["beat"], e["position"]["measure"]))
     print("  (se %d righe e non %d, il problema e' altrove)"
-          % (len([e for e in events if wrong_pitch(e)]), truth["wrong_pitch"]))
+          % (len(aligned), truth["wrong_pitch"]))
 
     # la traccia che andra' in pasto al monitor RML
     with open("/work/joined.jsonl", "w", encoding="utf-8") as f:

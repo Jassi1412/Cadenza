@@ -1,9 +1,9 @@
 """Endpoint unico di Cadenza: riceve l'esecuzione, restituisce i sette verdetti.
 
-Il browser, a fine brano, manda lo spartito in MusicXML e l'elenco degli eventi
-che sono usciti da WebMIDI. Qui vengono ricostruiti i file che pymatchmaker
-richiede, girata la pipeline che gia' gira offline, e letti i sette exit code
-dei monitor RML.
+Il browser, a fine brano, manda lo spartito in MusicXML, l'elenco degli eventi
+che sono usciti da WebMIDI e il tempo al quale ha suonato. Qui lo spartito viene
+letto, le aspettative vengono messe accanto a quello che e' realmente successo,
+e i sette exit code dei monitor RML vengono letti.
 
 Il verdetto e' interamente in Prolog: questo file non contiene nessuna soglia,
 nessuna classificazione, nessun giudizio. Fa solo il lavoro di trasporto.
@@ -14,7 +14,8 @@ Uso
 
     req.json  {"score": "<musicxml ...>",
                "notes": [{"time_ms":0,"dur_ms":250,"pitch":60,"velocity":90}],
-               "control_changes": [{"time_ms":0,"controller":64,"value":127}]}
+               "control_changes": [{"time_ms":0,"controller":64,"value":127}],
+               "tempo_factor": 1.0}
 """
 import json
 import os
@@ -28,7 +29,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-import partitura as pt
 
 from join import ScoreModel, join, to_jsonl
 
@@ -47,21 +47,22 @@ METRICS = ("articulation", "chord-jitter", "dynamics-adherence", "pedal-toggle",
 MAX_BODY = 2 * 1024 * 1024
 
 
-def build_midi(notes, path):
-    """Trasforma gli eventi in un file MIDI.
+def read_tempo_factor(body):
+    """Quanti millisecondi reali vale un millisecondo scritto nello spartito.
 
-    pymatchmaker ha un'unica API e vuole un percorso di file: non accetta una
-    lista di eventi in memoria. E' l'unico motivo per cui questo file esiste.
+    Lo manda la pagina, che e' il posto dove l'utente sceglie il tempo con lo
+    slider: 1 se suona al tempo scritto, 2 se suona a meta' velocita'. Se il
+    campo manca o ha un valore che non ha senso, si torna al tempo scritto
+    invece di rifiutare la richiesta: e' un valore che cambia solo la scala dei
+    tempi, e perdere una prova intera per quello sarebbe peggio.
     """
-    from partitura.performance import Performance, PerformedPart
-    arr = np.zeros(len(notes), dtype=[("onset_sec", "f8"), ("duration_sec", "f8"),
-                                      ("onset_beat", "f8"), ("duration_beat", "f8"),
-                                      ("pitch", "i4"), ("velocity", "i4"), ("id", "U16")])
-    for i, n in enumerate(notes):
-        s, d = n["time_ms"] / 1000.0, n["dur_ms"] / 1000.0
-        arr[i] = (s, d, s, d, int(n["pitch"]), int(n["velocity"]), "n%d" % i)
-    pt.save_performance_midi(
-        Performance(performedparts=[PerformedPart.from_note_array(arr, id="p")]), path)
+    try:
+        f = float(body.get("tempo_factor", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(f) or f <= 0:
+        return 1.0
+    return f
 
 
 def validate(body):
@@ -96,21 +97,12 @@ def analyse(body):
 
     with tempfile.TemporaryDirectory() as tmp:
         score = os.path.join(tmp, "score.musicxml")
-        midi = os.path.join(tmp, "perf.mid")
         trace = os.path.join(tmp, "trace.jsonl")
         with open(score, "w", encoding="utf-8") as f:
             f.write(body["score"])
 
         model = ScoreModel.from_musicxml(score)
-        build_midi(notes, midi)
-
-        from matchmaker import Matchmaker
-        mm = Matchmaker(score_file=score, performance_file=midi,
-                        input_type="midi", method="pthmm", processor="pianoroll")
-        list(mm.run())
-        path = np.asarray(mm.score_follower.alignment_path)
-
-        events = join(model, notes, path, cc)
+        events = join(model, notes, read_tempo_factor(body), cc)
         with open(trace, "w", encoding="utf-8") as f:
             f.write(to_jsonl(events) + "\n")
 

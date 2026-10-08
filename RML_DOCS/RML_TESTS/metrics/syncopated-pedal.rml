@@ -31,31 +31,36 @@
 
 // nota suonata in un punto in cui lo spartito chiede il pedale
 notePedal matches {type:'noteon', expected:{pedal:true}};
-notePedal matches {type:'noteoff', expected:{pedal:true}};
 
 // nota suonata dove lo spartito non chiede nulla: libera, nessun obbligo
 plainNote matches {type:'noteon', expected:{pedal:false}};
-plainNote matches {type:'noteoff', expected:{pedal:false}};
+
+// I noteOff non hanno obbligo proprio: la tenuta della loro nota sta gia'
+// dentro l'obbligo dell'attacco. Devono solo poter rientrare in un ramo,
+// altrimenti bloccano la traccia quando cadono dentro una regione
+// (a parita' di timestamp il noteoff delle note della battuta precedente
+// porta pedal:true, perche' il JOIN lo annota dal bordo in cui cade).
+anyNoteOff matches {type:'noteoff'};
 
 pedalPress matches {type:'controlchange', controller:64, value:127};
 pedalRelease matches {type:'controlchange', controller:64, value:0};
 
-// LA REGOLA. Una regione di pedale dello spartito e' fatta cosi': la
-// pressione, e poi TUTTE le note che lo spartito tiene coperte, fino a quando
-// smette di chiederlo.
+// LA REGOLA. Il pedale sincopato e' proprio questo: la nota suona PRIMA, e
+// subito dopo si abbassa il pedale, che tiene vibrata la nota e le successive.
+// La pressione non sta prima della nota (quella e' la tenuta normale), sta
+// DOPO la prima nota della regione:
 //
-// Il punto delicato e' che `notePedal` compare due volte, e la seconda come
-// `notePedal*`: la prima nota sotto pedale DEVE essere preceduta dalla
-// pressione, le successive no. Senza quel doppio ruolo si chiederebbe una
-// pressione per ogni nota, che e' l'errore della versione precedente: dopo la
-// prima pressione il pedale e' gia' giù e pestarlo 216 volte non ha senso.
+//     notePedal+ pedalPress (notePedal \/ noteOff)*
 //
-// E se la pressione manca? Nessuna Region puo' iniziare, e la nota non puo'
-// essere consumata da nessun altro membro di Main. La traccia si blocca. E' il
-// meccanismo che rende esprimibile un obbligo: in RML non si puo' dire che un
-// evento manca, ma si puo' dire che un evento presente non ha con se' quello
-// che doveva precederlo.
-Region = pedalPress notePedal notePedal*;
+// Se la pressione manca, la prima nota sotto pedale non puo' essere consumata:
+// notePedal compare solo dentro Region, Region non parte senza la pressione,
+// e la traccia si blocca. E' la stessa tecnica di chord-jitter: l'obbligo e'
+// ancorato a un evento presente (la nota), e se quello che deve seguirne
+// manca, non c'e' nessun ramo che consumi la nota.
+//
+// notePedal+ prima del pedale: l'attacco del primo istante e' spesso un
+// accordo, tutte le note di quell'accordo suonano, e subito dopo si preme.
+Region = notePedal+ pedalPress (notePedal \/ anyNoteOff)*;
 
 // Il rilascio e' libero: puo' arrivare quando arriva.
-Main = (plainNote \/ pedalRelease \/ Region)*;
+Main = (plainNote \/ anyNoteOff \/ pedalRelease \/ Region)*;

@@ -1,10 +1,10 @@
-# Versioni estratte con `pip freeze` dall'immagine offline che produce 7/7.
-# Le stesse versioni danno gli stessi verdetti: non allinearne una per volta,
-# cambiare una riga qui cambia il risultato della pipeline.
-pymatchmaker==0.3.0
+# Dipendenze del servizio: leggere lo spartito e produrre la traccia.
+#
+# pymatchmaker, librosa e scipy per l'allineamento non ci sono piu': l'istante in
+# cui una nota doveva suonare si ricava dal tempo scritto nello spartito, non da
+# un confronto fra due registrazioni. scipy resta perche' partitura lo richiede.
 partitura==1.9.0
 numpy==1.26.4
 scipy==1.17.1
-librosa==0.11.0
 lxml==6.1.3
 mido==1.3.3

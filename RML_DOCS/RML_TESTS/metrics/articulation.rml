@@ -1,46 +1,81 @@
-// Metric: articulation (legato / staccato)
-// FR-006: ogni nota deve restare premuta almeno 30 ms.
+// Metric: articulation
+// Controlla che lo stacco e il legato siano quelli che lo SPARTITO chiede.
 //
-// PERCHE' SI MISURA LA DURATA E NON IL SILENIO FRA DUE NOTE.
-// La formulazione che suona piu' naturale e' "fra il rilascio di una nota e
-// l'attacco della successiva non devono passare piu' di 30 ms". Non e'
-// esprimibile su una traccia finita, e l'ho verificato: l'ultimo rilascio del
-// brano non ha nessun attacco dopo di se', quindi la regola non puo' chiudersi
-// e il monitor risponde "Unmatched end of trace" anche sulla esecuzione
-// corretta. RML non ha modo di dire "a meno che la traccia non finisca qui".
+// LA DOMANDA CHE FA LA REGOLA.
+// Per ogni nota su cui lo spartito scrive un cartiglio, la domanda non e' "quanto
+// hai tenuto premuto il tasto" ma "l'hai lasciato prima che arrivasse la nota
+// dopo?". Il confronto e' fra due istanti dell'ESECUZIONE, quindi non ha bisogno
+// del tempo scritto, ne' del fattore di velocita': vale uguale su un brano
+// lento, su uno veloce, e anche dentro un tratto in cui il tempo raddoppia a
+// meta' brano.
 //
-// Misurando la durata il vincolo e' sempre soddisfacibile: ogni nota che parte
-// ha un rilascio che la chiude. Il difetto resta rilevabile ed e' lo stesso
-// difetto di prima, visto dal otro lato.
+// LE DUE CASI CHE CI SONO.
+//   staccato (il pallino): il tasto va lasciato prima che arrivi la nota dopo.
+//   tenuto, legatura:     il tasto va tenuto fino a li'.
 //
-// TRUCCHETTO NECESSARIO PER DUE VOCI.
-// filler accetta gli altri attacchi. Senza, con due voci che attaccano
-// insieme il flusso e' attacco, attacco, rilascio, rilascio: il primo
-// Articulation consumerebbe il primo attacco e troverebbe un attacco dove
-// cerca un rilascio, e non chiuderebbe.
+// LO SPAZIO CHE NON SI CONTROLA.
+// Se lo spartito non scrive niente, questa regola non giudica la nota. Non e'
+// una dimenticanza: il compito della regola e' misurare quello che lo spartito
+// chiede, e su quel punto lo spartito non chiede niente. Su uno spartito senza
+// cartigli, quindi, questa regola non boccia niente e resta silenziosa: e' il
+// comportamento giusto, non una regola che non funziona.
 //
-// LIMITE CONOSCIUTO, DICHIARATO.
-// Cosi' l'Articulation parte dal primo attacco di ogni gruppo e assorbe gli
-// altri. La seconda voce viene controllata solo se attacca da sola. Su questo
-// brano le due voci attaccano e rilasciano sempre insieme, quindi meta' delle
-// note non e' sottoposta a controllo diretto: se si schiaccia una nota della
-// seconda voce, questa metrica non lo vede. Per chiuderlo servirebbe
-// abbinare attacco e rilascio per altezza, e non c'e' modo di scrivere "nota
-// diversa dalla precedente" dentro uno star. Il limite e' della regola, non
-// della traccia: il JOIN emette tutto quello che serve.
+// LA SOGLIA.
+// 0,75 e' l'unico numerotarie. Compare su due righe vicine, una per la direzione
+// dello stacco e una per quella del legato, e non va modificato da un'altra
+// parte: se un giorno la tolleranza cambia, si cambia qui.
+//
+// Il numero ha una forma perche' i due rami debbano incontrarsi nello stesso
+// punto: sotto 0,75 la nota e' staccata, sopra 0,75 e' tenuta. Con lo stesso
+// 0,75 nei due rami il punto di passaggio e' uno solo, e non c'e' una zona in
+// cui una nota sia gia' staccata e gia' tenuta.
+//
+// Perche' 0,75 e non 0,5: il margine serve perche' l'orecchio e la mano non
+// stanno sul confine. Su una nota staccata deve restare un quarto del tempo
+// vuoto prima della nota dopo, se non basta il SILENZIO a dire che il distacco
+// c'e'. Su una nota tenuta deve durare almeno tre quarti, se non basta una nota
+// appena sfiorata a sembrare suonata bene.
+//
+// IL LIMITE DICHIARATO.
+// Il 0,75 non e' tarato su esecuzioni vere di questo brano: nel repository non
+// c'e' nessuna registrazione, e le tracce di prova sono costruite a mano. E' un
+// punto di partenza ragionevole, non una misura. Va ri-tarato appena esiste una
+// esecuzione vera su cui appoggiarsi.
 
-controlEvent matches {type:'controlchange'};
-noteOff matches {type:'noteoff'};
+staccatoOk(num, vel, d, g) matches
+    {type:'noteon', note:{number:num, rawAttack:vel},
+     durMs:d, gapMs:g, expected:{art:'staccato'}} with d <= 0.75 * g;
+staccatoOk matches staccatoOk(_, _, _, _);
 
-noteOnT(t2) matches {type:'noteon', timestamp:t2};
+tenutoOk(num, vel, d, g) matches
+    {type:'noteon', note:{number:num, rawAttack:vel},
+     durMs:d, gapMs:g, expected:{art:'tenuto'}} with d >= 0.75 * g;
+tenutoOk matches tenutoOk(_, _, _, _);
 
-// tasto tenuto premuto almeno 30 ms
-heldLong(t2) matches noteOffT(t1) with t1 - t2 >= 30;
-noteOffT(t1) matches {type:'noteoff', timestamp:t1};
+legatoOk(num, vel, d, g) matches
+    {type:'noteon', note:{number:num, rawAttack:vel},
+     durMs:d, gapMs:g, expected:{art:'legato'}} with d >= 0.75 * g;
+legatoOk matches legatoOk(_, _, _, _);
 
-filler matches {type:'noteon'};
-filler matches {type:'controlchange'};
+// Nota su cui lo spartito non scrive niente: nessun vincolo.
+// `art` e' null esplicitamente nella traccia, non assente: e' la stessa
+// distinzione che fa dynExplicit per la dinamica. Serve a poter dire "qui non
+// c'e' niente scritto" e non "qui e' scritto che non c'e'".
+noMark matches {type:'noteon', expected:{art:null}};
+noMark matches noMark(_);
 
-Articulation = {let t2; noteOnT(t2) filler* heldLong(t2)};
+// Ultimo attacco: non c'e' nessuna nota dopo, quindi non c'e' niente da
+// confrontare. gapMs e' null per esplicita dichiarazione del JOIN.
+noGap matches {type:'noteon', gapMs:null};
+noGap matches noGap(_);
 
-Main = (controlEvent \/ noteOff \/ Articulation)*;
+// Il filtro tiene nel flusso solo gli attacchi: rilasci e cambi di pedale non
+// interrompono la regola. DEVE essere privo del vincolo, per lo stesso motivo
+// di dynamics-adherence: se il filtro usasse un tipo gia' vincolato, la nota
+// sbagliata verrebbe scartata dal filtro e la regola risulterebbe soddisfatta
+// proprio nel caso che doveva segnalare.
+anyNoteOn matches {type:'noteon'};
+
+// L'unione e' `\/`, non `|`: il `|` delle dichiarazioni matches letto qui dentro
+// consumerebbe due eventi per passo e la traccia non quadra piu'.
+Main = anyNoteOn >> (staccatoOk \/ tenutoOk \/ legatoOk \/ noMark \/ noGap)*;

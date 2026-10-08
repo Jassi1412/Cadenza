@@ -42,10 +42,10 @@ RUN set -e; \
     test "$n" -eq 7 || { echo "ATTESE 7, TROVATE $n"; exit 1; }
 
 # ── Stage 2: runtime ────────────────────────────────────
-# La base python:3.12-slim con pymatchmaker e' l'immagine gia' usata per la
-# pipeline offline: stesse versioni, quindi stessi verdetti. Non e' riusata
-# direttamente perche' Render deve poterla ricostruire da zero: qui le
-# dipendenze sono dichiarate esplicitamente.
+# Immagine Python minimale: il verdetto e' in Prolog, il resto e' lettura dello
+# spartito. Non serve piu' nessun motore di allineamento audio, quindi niente
+# torch, niente librosa: le dipendenze sono elencate esplicitamente in
+# requirements.txt, cosi' Render le ricostruisce da zero a ogni build.
 FROM python:3.12-slim
 
 # swi-prolog-nox e' il pacchetto Debian di SWI-Prolog senza interfaccia grafica.
@@ -81,13 +81,8 @@ ENV PORT=8080
 # Su Render l'istanza free ha poco meno di un core: lanciano una dozzina di
 # thread che si contendono lo stesso core e il throughput crolla.
 #
-# Misurato sullo stesso container, metà CPU:
-#   thread liberi   49,90 s
-#   thread = 1       1,27 s      <- 39 volte più veloce
-#
-# Con un solo thread l'allineamento torna a girare in circa un secondo, che è
-# la velocità che si misura in locale: il collo di bottiglia non era la CPU,
-# erano i thread in collisione. Nessun costo, una riga.
+# Con un solo thread la costruzione della traccia resta nell'ordine del
+# secondo, che e' la velocita' che si misura in locale. Nessun costo, una riga.
 ENV OMP_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1

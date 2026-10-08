@@ -52,16 +52,25 @@ mateOf(c, t1) matches chordNote(c, t2) with abs(t2 - t1) < 30;
 
 mateOf matches mateOf(_, _);
 
-// Un accordo: due note dello stesso istante di partitura, entro 30 ms.
-// Lo spartito di prova non contiene accordi da 3 note, e una variante per tre
-// sarebbe codice mai esercitato: quando serve, si aggiunge insieme alla traccia
-// che la prova.
-Chord2 = {let c, t1; chordNote(c, t1) mateOf(c, t1)};
+// Un accordo: una nota con compagni, il primo compagno obbligatorio entro 30 ms
+// dalla prima, poi tutti gli altri compagni dello stesso istante di partitura.
+// Ogni compagno e' confrontato con la prima nota, non con il precedente: t1 e'
+// riempito una volta sola e non viene piu' toccato.
+//
+// Il primo compagno e' obbligatorio. Con zero o piu' un accordo allargato
+// diventerebbe una successione di "accordi" da una nota sola, e la regola non
+// controllerebbe piu' niente.
+//
+// La versione precedente consumava due note sole. Non reggeva: nel brano di
+// prova gli accordi vanno da 2 a 7 note, e su quelli da tre in su le note
+// restavano senza consumare, cosi' la regola segnalava anche le esecuzioni
+// corrette.
+Chord = {let c, t1; chordNote(c, t1) mateOf(c, t1) mateOf(c, t1)*};
 
-// Ogni attacco e' o una nota senza compagni, o un accordo tenuto stretto.
+// Ogni attacco e' o una nota senza compagni, o un accordo suonato tutto insieme.
 // Il membro dell'alternativa e' obbligato: una nota con compagni non puo'
-// essere trattata come singola, altrimenti nessun accordo strappato passerebbe
+// essere trattata come singola, altrimenti nessun accordo arpeggiato passerebbe
 // mai inosservato.
 //
 // Nota: l'unione fra espressioni e' `\/`, non `|`.
-Main = anyNoteOn >> (soloNote \/ Chord2)*;
+Main = anyNoteOn >> (soloNote \/ Chord)*;
