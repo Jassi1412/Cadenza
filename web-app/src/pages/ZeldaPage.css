@@ -14,12 +14,6 @@
   text-align: center;
 }
 
-.zelda-head h1 {
-  font-family: var(--font-heading);
-  font-size: 2.2rem;
-  margin: 0;
-}
-
 .zelda-sheet {
   width: 100%;
   max-width: 60rem;

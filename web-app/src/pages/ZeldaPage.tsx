@@ -92,10 +92,6 @@ const ZeldaPage: React.FC = () => {
 
   return (
     <div className="zelda-page">
-      <header className="zelda-head">
-        <h1 className="heading">Zelda — The Great Fairy Fountain</h1>
-      </header>
-
       <div className="zelda-sheet" ref={sheetRef} />
 
       <div className="zelda-actions">
