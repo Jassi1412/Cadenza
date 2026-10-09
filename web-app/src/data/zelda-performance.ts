@@ -15,11 +15,6 @@ import type { ControlChange, PerformedNote } from '../hooks/useVerdict';
 /** ms reali per ms scritti nello spartito: la registrazione gira al 129% del scritto. */
 export const ZELDA_TEMPO_FACTOR = 0.775;
 
-/** Lo spartito al tempo scritto: 16 misure in 2/2 = 64 quarti a 155 BPM = 24.77 s. */
-export const ZELDA_WRITTEN_MS = 24774;
-/** Col ritornello (la battuta 16 rimanda alla 1) lo spartito scritto dura il doppio. */
-export const ZELDA_WRITTEN_REPEAT_MS = 49548;
-
 export const ZELDA_SCORE_URL = `${import.meta.env.BASE_URL}scores/zelda-fairy-fountain.musicxml`;
 
 export const ZELDA_PERFORMANCE: {

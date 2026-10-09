@@ -17,58 +17,7 @@
 .zelda-head h1 {
   font-family: var(--font-heading);
   font-size: 2.2rem;
-  margin: 0 0 0.5rem;
-}
-
-.zelda-head p {
-  color: var(--text-secondary);
   margin: 0;
-  line-height: 1.6;
-}
-
-.zelda-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
-  gap: 0.75rem;
-  width: 100%;
-  max-width: 46rem;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.zelda-stats li {
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 10px;
-  padding: 0.6rem 0.8rem;
-  text-align: center;
-}
-
-.zelda-stat-value {
-  display: block;
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.zelda-stat-label {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-top: 0.15rem;
-}
-
-.zelda-chart {
-  width: 100%;
-  max-width: 46rem;
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 10px;
-  padding: 0.75rem;
-}
-
-.zelda-chart figcaption {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.5rem;
 }
 
 .zelda-sheet {
