@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '../hooks/useVerdict';
 import type { VerdictMap } from '../hooks/useVerdict';
-import { METRIC_LABELS } from '../metrics';
 import {
   ZELDA_PERFORMANCE,
   ZELDA_SCORE_URL,
@@ -214,7 +213,7 @@ const ZeldaPage: React.FC = () => {
                 {Object.entries(verdicts).map(([key, v]) => (
                   <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
                     <span className="verdict-mark">{v.ok ? '✓' : '✗'}</span>
-                    <span className="verdict-name">{METRIC_LABELS[key] ?? key}</span>
+                    <span className="verdict-name">{key}</span>
                     <span className="verdict-detail">{v.ok ? 'conforme' : 'violata'}</span>
                   </li>
                 ))}

@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
-import { METRIC_LABELS } from '../metrics';
 import PlaybackBar from '../components/PlaybackBar';
 import './ScorePage.css';
 
@@ -478,7 +477,7 @@ const ScorePage: React.FC = () => {
                 {Object.entries(verdict.verdicts).map(([key, v]) => (
                   <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
                     <span className="verdict-mark">{v.ok ? '✓' : '✗'}</span>
-                    <span className="verdict-name">{METRIC_LABELS[key] ?? key}</span>
+                    <span className="verdict-name">{key}</span>
                     <span className="verdict-detail">{v.ok ? 'conforme' : 'violata'}</span>
                   </li>
                 ))}
