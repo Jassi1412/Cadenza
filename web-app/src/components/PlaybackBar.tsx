@@ -17,6 +17,16 @@ interface PlaybackBarProps {
   bpm: number;
   scoreBpm: number;
   onBpmChange: (bpm: number) => void;
+  /**
+   * Modalità a passi: il brano sta fermo e avanza di un passo per volta.
+   *
+   * È il modo in cui si impara un passaggio; la modalità normale è dove si va
+   * quando lo si sa già, ed è lì che il tempo conta. Sono due esercizi diversi
+   * sullo stesso motore, non due versioni della stessa cosa.
+   */
+  isPractice: boolean;
+  onPractice: () => void;
+  onPracticeStop: () => void;
 }
 
 /** Stopwatch SVG — the play-along button */
@@ -58,23 +68,27 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
   bpm,
   scoreBpm,
   onBpmChange,
+  isPractice,
+  onPractice,
+  onPracticeStop,
 }) => {
   const slowed = bpm < scoreBpm;
 
   return (
     <div className="playback-bar" id="playback-bar">
       {/* Thin progress line at the top of the pill */}
-      {!isTakeActive && (
+      {!isTakeActive && !isPractice && (
         <div className="bar-progress">
           <div className="bar-progress-fill" style={{ width: `${progress}%` }} />
         </div>
       )}
 
-      {/* Play / Pause — ascolto puro, non registra nulla */}
+      {/* Play / Pause — ascolto puro, non registra nulla. Spento in pratica: lì
+          il brano non scorre, e un tasto che sembra avviarlo sarebbe una bugia. */}
       <button
         className={`bar-btn ${isPlaying ? 'active' : ''}`}
         onClick={onPlayPause}
-        disabled={isLoading || isTakeActive}
+        disabled={isLoading || isTakeActive || isPractice}
         title={isPlaying ? 'Pause' : 'Play'}
         id="bar-play-btn"
       >
@@ -112,7 +126,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
       <button
         className={`bar-btn ${isTakeActive ? 'practice-active' : ''}`}
         onClick={onPlayAlong}
-        disabled={isLoading || isTakeActive}
+        disabled={isLoading || isTakeActive || isPractice}
         title={isTakeActive ? 'Prova in corso' : 'Suona insieme allo spartito'}
         id="bar-practice-btn"
       >
@@ -120,11 +134,32 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         <span className="bar-btn-label">{isTakeActive ? 'In corso' : 'Suona insieme'}</span>
       </button>
 
-      {/* Tempo. Sparisce durante la prova, e non è solo disabilitato: durante
-          la prova il fattore che il verdetto usa è già stato letto, e lasciare
-          un cursore che sembra regolabile ma non conta sarebbe peggio che
+      {/* Modalità a passi: il brano sta fermo e avanza di una nota alla volta.
+          Il tasto cambia funzione quando è attiva, invece di aggiungerne un
+          altro: durante la pratica non c'è niente da avviare, solo da fermare. */}
+      <button
+        className={`bar-btn ${isPractice ? 'practice-active' : ''}`}
+        onClick={isPractice ? onPracticeStop : onPractice}
+        disabled={isLoading || isTakeActive}
+        title={isPractice ? 'Esci dalla pratica' : 'Brano fermo, un passo per volta'}
+        id="bar-step-btn"
+      >
+        <span
+          className="material-symbols-outlined bar-icon vintage-icon"
+          style={{
+            fontVariationSettings: "'FILL' 0, 'wght' 100, 'GRAD' 0, 'opsz' 48",
+          }}
+        >
+          {isPractice ? 'close' : 'piano'}
+        </span>
+        <span className="bar-btn-label">{isPractice ? 'Esci' : 'Un passo'}</span>
+      </button>
+
+      {/* Il tempo sparisce in pratica. Non e' disabilitato: qui non esiste.
+          Nella modalita' a passi la durata di una nota non ha un ruolo, e uno
+          slider che sembra regolare qualcosa che non conta sarebbe peggio che
           non averlo. */}
-      {!isTakeActive && (
+      {!isTakeActive && !isPractice && (
         <div className="bar-tempo">
           <input
             type="range"

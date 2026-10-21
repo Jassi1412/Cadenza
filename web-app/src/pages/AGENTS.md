@@ -8,7 +8,7 @@ Top-level page components — one per application route. Each page composes hook
 
 - `HomePage.tsx` / `.css` — Landing page. Minimal hero section with the Cadenza logo and a single CTA linking to `/upload`.
 - `UploadPage.tsx` / `.css` — Score upload screen. Drag-and-drop or browse for a MusicXML file (`.xml`, `.musicxml`, `.mxl`). Hosts the `MidiPanel` so the user can connect a MIDI device before opening the score. Passes the selected `File`, `midiEnabled`, and `midiInputId` to `/score` via `react-router-dom` `location.state`.
-- `ScorePage.tsx` / `.css` — The main score viewer and play-along surface. Dynamically imports `@music-i18n/musicxml-player` (Player + OSMD renderer + Verovio converter). Owns the take lifecycle as an explicit state machine, `phase: 'idle' | 'countdown' | 'playing'`: a countdown holds the player while the musician gets to the keyboard, then the score plays and the keyboard is recorded, then the verdict posts itself. Composes `PlaybackBar`, `useMidi`, and `useVerdict`. The verdict panel shows each rule by its English name (the `.rml` filename).
+- `ScorePage.tsx` / `.css` — The main score viewer, play-along surface, and step-by-step practice surface. Dynamically imports `@music-i18n/musicxml-player` (Player + OSMD renderer + Verovio converter). Owns the take lifecycle as an explicit state machine, `phase: 'idle' | 'countdown' | 'playing'`: a countdown holds the player while the musician gets to the keyboard, then the score plays and the keyboard is recorded, then the verdict posts itself. Composes `PlaybackBar`, `PracticePanel`, `useMidi`, `useVerdict`, and `usePractice`. The verdict panel shows each rule by its English name (the `.rml` filename).
 - `MetricsTestPage.tsx` / `.css` — REMOVED. It recomputed six metrics in TypeScript with thresholds hardcoded in the page (`LEGATO_GAP_MS = 30`, attack ≥ 80, chord 30 ms, pedal 200 ms), duplicating the ones inside the RML `.rml` specs. Two copies of the same number diverge as soon as one is edited. Verdicts come from the service via `useVerdict` and are rendered by `ScorePage`; a removed page must not be reintroduced as an in-browser reimplementation.
 
 ## Local Contracts
@@ -26,18 +26,49 @@ Top-level page components — one per application route. Each page composes hook
 - Space bar toggles play/pause on `ScorePage` (suppressed while loading and during a take)
 - A take and plain playback are mutually exclusive — pressing Play mid-take does nothing, Stop aborts the take
 
+### The two modes are separate on purpose
+
+- `isPractice` switches between them. Practice NEVER touches the player: no `position`, no `requestAnimationFrame` loop, no time factor sent to the service. The score stands still and the cursor is a step index, which is why the temporal alignment of the normal mode is not needed here at all
+- The two panels are mutually exclusive. The verdict panel is hidden during practice and the practice panel is hidden outside it: they judge the same performance in two different ways, and showing them together would suggest the end-of-piece verdict also applies to the step mode
+- `stepStartRef` marks where the current step begins inside `midi.recording`. The recording is NOT cleared between steps, so without that boundary the twentieth step would carry the notes of the previous nineteen and `pitch-agreement` would judge them against the wrong step, producing invented violations
+- The step boundary moves in an effect keyed on `practice.index`, not right after `submit`, because the hook decides the advance and reading its result immediately would give the stale value
+- The submit effect fires when the set of pressed pitches CHANGES, not on every MIDI event: a note-off changes nothing a practice rule looks at, and requesting a verdict for each release would queue four requests for a chord instead of two
+
+### The cursor in practice mode
+
+- `moveCursorToStep` drives the OSMD cursor by hand. `followCursor` is on, but it follows the **player**, and in practice the player never starts — so nothing would ever move it
+- It counts POSITIONS, and does not compare pitches. This is the second version of this function, and the change is forced by a measurement, not by taste.
+- The first version searched for the voice whose notes matched the step's. In a real browser it NEVER matched. OSMD reports every note 36 semitones (three octaves) below the plan, uniformly across the piece, because the score carries an `<octave-shift type="down" size="8">` on the violin staff. Step 0 asks for `[46, 93]` and the matching voice says `[10, 57]`; step 1 asks for `[46, 86]` and the voice says `[10, 50]`
+- Writing a `-36` in the code would be a bug dressed as a constant: it would change with the first score that lacks that sign. The height of a note is not a reliable link between the two sides
+- What DOES hold is the POSITION, and it was measured on the whole piece: the iterator's stop `k` is the plan's step `k` — 128 of 128, with the measure matching 128 of 128. Both sides list the attacks in chronological order, so counting is enough and no pitch is read
+- The iterator makes 256 stops for 128 steps because the score has a repeat: the second pass is byte-for-byte the first. Practice stops at step 127, i.e. at the end of the first pass, and the count therefore stops at `stepIndex` instead of trying to reach the end of the score
+- `cursorStepRef` holds where the cursor stopped, so each step walks forward instead of restarting. It resets only when moving backwards or when its position is unknown (`-1`)
+- Bound: 6000 steps — not a musical limit, the point where giving up beats freezing the page
+- Leaving practice hides the cursor; the normal mode's `followCursor` takes over again
+
+### The practice panel sits ABOVE the score
+
+- The panel is rendered BEFORE `.score-container`, not after it. Measured in a browser: as a trailing element it landed 2163 px down the document — two and a half screens below the fold. The student looks at the score to follow the cursor and cannot see which key to press without scrolling, which is the one thing the panel exists to say
+- It is `position: sticky; top: 0`, so it stays anchored while the score scrolls. It is opaque on purpose: the score passes under it
+- The panel is TWO columns: the left holds the keys and the step number (what you need to play right now), the right holds the verdicts and the suspended rules (what you read afterwards). One column made the panel 553 px tall — it covered half the score while the left column stayed empty for two thirds of its height
+- The suspended rules live in a closed `<details>`. Their text explains WHY they do not apply, and that is read once, not every step. Closed, the panel is 207 px tall
+- The panel must never be the thing that hides the score: the cursor and the keys are the two things on screen at the same time, and the whole exercise is their relation
+
 ## Work Guidance
 
 - The `@music-i18n/musicxml-player`, `opensheetmusicdisplay`, and `webmidi` libraries are dynamically or lazily loaded where possible to keep the initial bundle small
 - `ScorePage` uses module-level `let` refs for dynamically-imported library classes (`Player`, `OpenSheetMusicDisplayRenderer`, `VerovioConverter`) — these are populated on first load
 - Verovio converter uses the `Bravura` font to avoid Leipzig font-loading errors
 - Loading states must show a spinner and message; errors must offer a "Try Another File" path back to `/upload`
+- Keep the practice surface in `ScorePage` rather than a new route: it needs the same player, the same MIDI hook instance, and the same rendered score, and a second route would duplicate the 11 MB player chunk
 
 ## Verification
 
 - `npm run lint` — ESLint
 - `npm run build` — TypeScript type-check + Vite build
 - Manual: upload a `.musicxml` file, verify rendering, then press "Suona insieme" and check that the countdown runs, the score plays, and the verdict arrives without pressing anything
+- Manual (practice): press "Un passo", check the plan loads, then play a step. The cursor must advance only when every note of the step has been pressed, an extra note must NOT block it, the key colours must be immediate while the verdicts arrive a couple of seconds later, and the three suspended rules must be listed with their reason
+- `node ../alignment/_probe_browser.mjs` — 28 checks in a real browser (Chromium via CDP): the score renders, the practice panel appears with the three suspended rules, the keys and the step number are visible WITHOUT scrolling, the dynamics toggle switches the caption and filters only its own row, playing the right notes advances the cursor and the OSMD cursor element really moves, a wrong note does not advance, the verdicts arrive as "conforme", and the cursor hides on exit. It needs the dev server on port 5173 and the service on 8080, and it fakes `navigator.requestMIDIAccess` so no keyboard is required
 
 ## Child DOX Index
 

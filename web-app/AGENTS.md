@@ -46,7 +46,7 @@ Update parent docs when parent-level structure, ownership, workflow, or child in
 `npx eslint .` must be clean, but three suppressions are deliberate and file-scoped in `eslint.config.js`. Do not delete them; do not widen them:
 
 - `globalIgnores(['dist', 'temp-osmd'])` — `temp-osmd/` is a vendored OpenSheetMusicDisplay build tracked in git, not our code
-- `@typescript-eslint/no-explicit-any: off` for `src/hooks/usePracticeMode.ts` and `src/pages/ScorePage.tsx` — OSMD and `musicxml-player` ship no usable type definitions
+- `@typescript-eslint/no-explicit-any: off` for `src/pages/ScorePage.tsx` — OSMD and `musicxml-player` ship no usable type definitions
 - `react-hooks/globals`, `react-hooks/immutability`, `react-hooks/rules-of-hooks: off` for `src/hooks/useMidi.test.ts` — that file is a hand-rolled hook harness that runs outside a React render tree
 
 One `set-state-in-effect` suppression remains inline, with the reasoning in a comment: `useMidi.ts` (selection must follow the port that actually delivers, and `selectInput` is an explicit user override). It is external-system synchronization, not render-time derivation. The former second one lived in `MetricsTestPage.tsx`, removed with the page.
@@ -92,5 +92,15 @@ When the user requests a durable behavior change, record it here or in the relev
 
 - `src/` — Application source root: React entry point (`main.tsx`), top-level router (`App.tsx`), global stylesheets, and three durable subdomains:
   - `src/pages/` — Route-level page components (HomePage, UploadPage, ScorePage)
-  - `src/components/` — Reusable presentational components (MidiPanel, PlaybackBar, StaffToggle)
-  - `src/hooks/` — Domain-logic hooks (useMidi, usePracticeMode, useVerdict)
+  - `src/components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticePanel)
+  - `src/hooks/` — Domain-logic hooks (useMidi, useVerdict) and the pure exercise-rules module (practiceSteps) with its session hook (usePractice)
+
+## Service contract
+
+The backend lives in `../alignment/` and `../service/`, not here, but the web app depends on its three endpoints. They are contract, not implementation detail:
+
+- `POST /` — normal mode. `{score, notes, control_changes, tempo_factor}` → the seven RML verdicts for the whole piece
+- `POST /practice` — the practice plan: `{score}` → every step with the pitches it asks for, plus the active and the suspended rules
+- `POST /practice/step` — one step: `{score, step, events, control_changes}` → the verdicts of the practice rules for that step, the completeness status, and the suspended rules
+
+`exit` in a verdict is three-valued, and the app must not collapse it: `0` conforms, `1` is violated, `2` is **the monitor did not start** (missing `swipl`, a spec that does not compile). Rendering `2` as "violata" tells the student they played badly when the service is broken. `PracticePanel` shows it as its own state.

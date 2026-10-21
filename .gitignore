@@ -45,3 +45,20 @@ RML_DOCS/RML_TESTS/metrics/*.pl
 *.log
 *.tmp
 *.bak
+
+# === Lavoro temporaneo del servizio ===
+# La cartella in cui server.py scrive spartiti e tracce, e le tracce delle sonde.
+# Sono file di lavoro di una richiesta: tenerli fuori dal repo evita di
+# committare spartiti e tracce che cambiano a ogni esecuzione.
+alignment/scratch/
+alignment/_probe_traces/
+__pycache__/
+*.pyc
+
+# === Configurazione locale ===
+# Il puntamento al servizio in locale (VITE_CADENZA_API) e' una scelta di chi
+# sviluppa, non del progetto: committarlo farebbe girare gli altri sul servizio
+# dell'autore. Il file .env.example resta tracciato e dice cosa metterci.
+web-app/.env.local
+web-app/.env.*.local
+

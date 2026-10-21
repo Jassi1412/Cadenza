@@ -20,6 +20,8 @@ Root of the Cadenza web application source tree. Hosts the React entry point, th
 - Do not statically import a page that transitively pulls a heavy vendor chunk: `ScorePage` imports the MusicXML/OSMD stylesheet and already `await import('@music-i18n/musicxml-player')` at runtime
 - The nav header in `App.tsx` is the single source of truth for top-level navigation links
 - Routing state passed between pages uses `react-router-dom` `location.state` (see `UploadPage` → `ScorePage` handoff)
+- The two ways of judging a performance (the end-of-piece verdict and the step-by-step practice) are both surfaces of `ScorePage`, not separate routes: they share the rendered score, the player instance, and the MIDI hook, and a second route would fetch the 11 MB player chunk twice
+- A module that must be runnable on its own (compiled and executed by a script, outside a component tree) does not belong in a `.tsx` file and must not import `useVerdict`, which pulls `import.meta.env`. See `hooks/practiceSteps.ts`
 
 ## Work Guidance
 
@@ -32,9 +34,10 @@ Root of the Cadenza web application source tree. Hosts the React entry point, th
 - `npm run lint` (ESLint flat config, `eslint.config.js`)
 - `npm run build` (`tsc -b && vite build`) — type-check + production build
 - `npm run dev` — Vite dev server
+- `node ../alignment/run_practice_tests.mjs` — runs the pure exercise rules on node. Useful when `vite build`/`vitest` cannot start (both call `execFile`, denied in a sandboxed environment)
 
 ## Child DOX Index
 
 - `pages/` — Route-level page components (Home, Upload, Score) and their co-located CSS
-- `components/` — Reusable presentational components (MidiPanel, PlaybackBar)
-- `hooks/` — Domain-logic hooks (useMidi, useVerdict)
+- `components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticePanel)
+- `hooks/` — Domain-logic hooks (useMidi, useVerdict) and the step-by-step practice module (practiceSteps, usePractice)

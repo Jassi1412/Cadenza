@@ -3,7 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
+import { usePractice } from '../hooks/usePractice';
+import { pressedPitches } from '../hooks/practiceSteps';
 import PlaybackBar from '../components/PlaybackBar';
+import PracticePanel from '../components/PracticePanel';
 import './ScorePage.css';
 
 // Module-level refs for dynamic imports
@@ -78,6 +81,74 @@ const STALL_MS = 2000;
 /** Silenzio fra un numero e l'altro del countdown, in ms. */
 const COUNTDOWN_STEP_MS = 750;
 
+/**
+ * Porta il cursore di OSMD sul passo indicato, e dice dove e' arrivato.
+ *
+ * PERCHE' SI CONTA E NON SI CONFRONTANO LE NOTE. La prima versione cercava la
+ * voce le cui note coincidessero con quelle del passo. In un browser vero non
+ * combacia MAI, e la ragione e' che i due lati parlano di ottave diverse: su
+ * questo brano OSMD riporta ogni nota 36 semitoni (tre ottave) sotto il piano,
+ * in modo uniforme, per via di una direzione `<octave-shift type="down" size="8">`
+ * scritta sul rigo di violino. Il passo 0 chiede [46, 93] e la voce
+ * corrispondente dice [10, 57]; il passo 1 chiede [46, 86] e la voce dice
+ * [10, 50]. Scrivere "-36" nel codice sarebbe un bug travestito da costante:
+ * cambierebbe con il primo spartito che non ha quel segno.
+ *
+ * QUELLO CHE INVECE TORNA, misurato sul brano intero. Sia il piano sia
+ * l'iteratore elencano gli ATTACCHI in ordine cronologico, e il k-esimo
+ * dell'uno e' il k-esimo dell'altro: su 128 passi la fermata k dell'iteratore
+ * cade nella battuta del passo k 128 volte su 128, senza un solo scarto. Quindi
+ * si conta, e non si legge nessun pitch.
+ *
+ * L'iteratore fa 256 fermate contro 128 passi perche' lo spartito ha un
+ * ritorno di ripetizione: il secondo giro ripete il primo esattamente. Non e'
+ * un problema qui — la pratica si ferma al passo 127, cioe' alla fine del primo
+ * giro — ed e' il motivo per cui il conteggio si ferma a `stepIndex` invece di
+ * pretendere di aver finito lo spartito.
+ *
+ * Ritorna la posizione raggiunta, oppure -1 se non ce l'ha fatta. Chi chiama
+ * conserva il valore perche' la pratica avanza solo in avanti e ricominciare il
+ * cammino da capo a ogni passo costerebbe un salto dello schermo.
+ */
+function moveCursorToStep(osmd: any, stepIndex: number, fromStep: number): number {
+  const cursor = osmd?.cursors?.[0];
+  if (!cursor) return -1;
+  try {
+    // Si torna all'inizio solo se si va indietro o se non si sa dove si e'.
+    // Senza il reset, dopo un ascolto completo il cursore resterebbe in fondo e
+    // il primo passo non lo troverebbe mai; con un reset a ogni passo, invece,
+    // lo spartito salterebbe all'inizio 128 volte.
+    let pos = fromStep;
+    if (pos < 0 || pos > stepIndex) {
+      cursor.reset();
+      pos = 0;
+    }
+    cursor.show();
+
+    // Rete di sicurezza: un brano lungo ha migliaia di fermate, e un ciclo
+    // senza fine bloccherebbe la pagina. Non e' un limite musicale, e' il
+    // punto in cui rinunciare e' meglio che piantarsi.
+    for (let guard = 0; pos < stepIndex && guard < 6000; guard++) {
+      if (cursor.Iterator?.EndReached) break;
+      cursor.next();
+      pos++;
+    }
+    // `show()` dopo il cammino: `update()` non disegna nulla mentre il cursore
+    // e' nascosto, quindi mostrarlo alla fine e' l'unico ordine che lo fa
+    // comparire davvero nella posizione raggiunta.
+    cursor.show();
+    return pos;
+  } catch (err) {
+    console.warn('[ScorePage] posizionamento del cursore:', err);
+    try {
+      cursor.hide();
+    } catch {
+      // gia' nascosto, o l'istanza e' stata distrutta: niente da fare
+    }
+    return -1;
+  }
+}
+
 const ScorePage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -117,6 +188,132 @@ const ScorePage: React.FC = () => {
       console.error('[ScorePage] Non sono riuscito a leggere lo spartito:', err);
     }
   }, [file, verdict, scoreBpm, bpm]);
+
+  // ── Modalità a passi ───────────────────────────────────────────────
+  //
+  // Il brano non scorre: sta fermo sul passo corrente e avanza quando l'allievo
+  // ha premuto i tasti di quel passo. È l'altro modo di usare lo stesso motore
+  // RML, e non tocca quello normale: qui non si tocca il player, non si legge
+  // `position`, non c'è nessun fattore di tempo da mandare al servizio.
+  const practice = usePractice();
+  const [isPractice, setIsPractice] = useState(false);
+
+  // Dove comincia, dentro `midi.recording`, la roba del passo corrente.
+  //
+  // `recording` e' la registrazione intera e non si azzera fra un passo e
+  // l'altro: quello che va mandato al servizio e' solo cio' che e' stato suonato
+  // davanti a QUESTO passo. Questo indice e' il confine, e si sposta quando il
+  // cursore avanza.
+  //
+  // Il motivo per cui l'indice serve davvero, e non basta mandare tutto: se
+  // mandassi l'intera registrazione, al passo 20 la traccia conterrebbe le note
+  // dei 19 passi precedenti, e `pitch-agreement` le giudicherebbe al passo
+  // sbagliato. Il verdetto sarebbe pieno di violazioni inventate.
+  const stepStartRef = useRef(0);
+  const lastLenRef = useRef(0);
+  const lastSigRef = useRef('');
+  // Dove il cursore di OSMD e' fermo adesso, in numero di fermate: -1 = non
+  // posizionato. Serve per non ricominciare il cammino a ogni passo.
+  const cursorStepRef = useRef(-1);
+
+  const startPractice = useCallback(async () => {
+    if (!file) return;
+    playerRef.current?.pause();
+    playerRef.current?.rewind();
+    setIsPlaying(false);
+    setProgress(0);
+    setPhase('idle');
+    setIsPractice(true);
+    midi.clearRecording();
+    stepStartRef.current = 0;
+    lastLenRef.current = 0;
+    lastSigRef.current = '';
+    if (!midi.isEnabled) {
+      await midi.enable();
+      // L'input si popola al tick successivo: senza questa attesa le prime note
+      // del primo passo non arriverebbero a nessuno.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await practice.start(await file.text());
+  }, [file, midi, practice]);
+
+  const stopPractice = useCallback(() => {
+    setIsPractice(false);
+    practice.reset();
+    stepStartRef.current = 0;
+    lastLenRef.current = 0;
+    lastSigRef.current = '';
+  }, [practice]);
+
+  /**
+   * Manda al servizio gli eventi suonati davanti al passo corrente.
+   *
+   * Scatta quando l'insieme dei tasti premuti CAMBIA, non a ogni evento: un
+   * rilascio non cambia niente di quello che una regola di pratica guarda, e
+   * far partire una richiesta anche per i rilasci significherebbe quattro
+   * richieste per un accordo invece di due. Il verdetto di un passo costa ~2 s
+   * sul servizio deployato, quindi i rilasci in coda terrebbero il pannello
+   * indietro di parecchi secondi senza aggiungere nessuna informazione.
+   *
+   * L'avanzamento del cursore NON dipende da questa richiesta: lo decide
+   * `usePractice` in locale, ed è la ragione per cui la latenza del verdetto non
+   * si sente mentre si suona.
+   */
+  useEffect(() => {
+    if (!isPractice || practice.phase !== 'ready') return;
+    const rec = midi.recording;
+    if (rec.length === lastLenRef.current) return;
+    lastLenRef.current = rec.length;
+
+    const eventi = rec.slice(stepStartRef.current);
+    const sig = pressedPitches(eventi).join(',');
+    if (sig === lastSigRef.current) return;   // solo rilasci: niente da dire
+    lastSigRef.current = sig;
+
+    practice.submit(eventi);
+  }, [midi.recording, midi.recording.length, isPractice, practice]);
+
+  // Il cursore e' avanzato: il prossimo passo comincia da dove siamo ora.
+  //
+  // Sta in un effetto e non dentro `submit` perche' l'avanzamento lo decide
+  // l'hook, e leggerne l'esito subito dopo la chiamata darebbe il valore
+  // vecchio. Cosi' invece si sposta il confine quando React ha gia' reso il
+  // nuovo indice, che e' esattamente quando serve.
+  useEffect(() => {
+    if (!isPractice) return;
+    stepStartRef.current = lastLenRef.current;
+    lastSigRef.current = '';
+  }, [practice.index, isPractice]);
+
+  // Il cursore segue il passo. E' l'unica cosa che muove lo spartito in questa
+  // modalita': il player non parte mai, quindi `followCursor` non ha niente da
+  // seguire e il cursore lo si guida a mano.
+  //
+  // Il posizionamento e' per POSIZIONE, non per nota: la fermata k del cursore
+  // corrisponde al passo k del piano (misurato: 128 su 128). Il confronto per
+  // pitch non e' usabile, perche' OSMD riporta le note tre ottave sotto rispetto
+  // al piano, e un offset scritto nel codice cambierebbe col prossimo spartito.
+  // Vedi la funzione `moveCursorToStep` per la misura.
+  useEffect(() => {
+    if (!isPractice || practice.phase !== 'ready') return;
+    if (!practice.steps[practice.index]) return;
+    cursorStepRef.current = moveCursorToStep(
+      osmdRef.current, practice.index, cursorStepRef.current,
+    );
+  }, [isPractice, practice.phase, practice.index, practice.steps]);
+
+  // Uscendo dalla pratica il cursore si nasconde: era li' per indicare dove
+  // sei nell'esercizio, e fuori dall'esercizio non indica niente. Tornando alla
+  // modalita' normale lo riprende in carico il player, con followCursor.
+  useEffect(() => {
+    if (isPractice) return;
+    cursorStepRef.current = -1;
+    try {
+      osmdRef.current?.cursors?.[0]?.hide();
+    } catch {
+      // OSMD non ancora pronto, o gia' distrutto
+    }
+  }, [isPractice]);
 
   // Il verdetto arriva da solo, a fine brano, mentre l'attenzione è sullo
   // spartito: senza questo il pannello si aprirebbe sotto la piega e sembrerebbe
@@ -436,6 +633,45 @@ const ScorePage: React.FC = () => {
         )}
       </div>
 
+      {/* Pannello della pratica. Sta al posto dei verdetti, non accanto: sono
+          due modi diversi di giudicare la stessa esecuzione, e mostrarli
+          insieme farebbe credere che il verdetto a fine brano valga anche qui. */}
+      {isPractice && practice.phase !== 'idle' && (
+        practice.phase === 'error' ? (
+          <section className="practice-panel">
+            <div className="practice-panel-head">
+              <h2 className="heading">Pratica</h2>
+              <button className="btn btn-outline" onClick={stopPractice}>Chiudi</button>
+            </div>
+            <p className="practice-error">
+              {practice.error ?? 'Non sono riuscito a preparare i passi di questo spartito.'}
+            </p>
+          </section>
+        ) : practice.phase === 'loading' ? (
+          <section className="practice-panel">
+            <p className="practice-idle">Sto leggendo lo spartito e preparando i passi…</p>
+          </section>
+        ) : (
+          <PracticePanel
+            stepIndex={practice.index}
+            total={practice.steps.length}
+            measure={practice.steps[practice.index]?.measure ?? 1}
+            expected={practice.steps[practice.index]?.pitch ?? []}
+            status={practice.status}
+            last={practice.last}
+            verdictStep={practice.verdictStep}
+            suspended={practice.suspended}
+            judging={practice.judging}
+            dynamicsOn={practice.dynamicsOn}
+            onDynamicsChange={practice.setDynamicsOn}
+            /* Un errore di rete non ferma l'esercizio: si segnala qui e si
+               continua a suonare. Interrompere un allievo per un problema del
+               servizio sarebbe la cosa peggiore che questa pagina possa fare. */
+            error={practice.error}
+          />
+        )
+      )}
+
       {/* Score Container */}
       <div className="score-container">
         {isLoading && (
@@ -457,7 +693,7 @@ const ScorePage: React.FC = () => {
       </div>
 
       {/* Verdicts — appear only after the performance has been analysed */}
-      {verdict.status !== 'idle' && (
+      {!isPractice && verdict.status !== 'idle' && (
         <section className="verdict-panel" ref={verdictPanelRef}>
           <div className="verdict-panel-head">
             <h2 className="heading">Il verdetto</h2>
@@ -498,11 +734,14 @@ const ScorePage: React.FC = () => {
           isLoading={isLoading}
           progress={progress}
           onPlayPause={handlePlayPause}
-          onStop={handleStop}
+          onStop={isPractice ? stopPractice : handleStop}
           onPlayAlong={handlePlayAlong}
           bpm={bpm}
           scoreBpm={scoreBpm}
           onBpmChange={setBpm}
+          isPractice={isPractice}
+          onPractice={() => void startPractice()}
+          onPracticeStop={stopPractice}
         />
       )}
     </div>

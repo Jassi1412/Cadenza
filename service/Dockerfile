@@ -61,9 +61,10 @@ RUN pip install --no-cache-dir -r /opt/requirements.txt
 
 COPY RML_DOCS/RML_TESTS/monitor/ /opt/rml/
 COPY --from=specs /specs/             /opt/specs/
-COPY alignment/join.py   /opt/join.py
-COPY alignment/server.py /opt/server.py
-COPY service/batch.pl     /opt/batch.pl
+COPY alignment/join.py     /opt/join.py
+COPY alignment/practice.py /opt/practice.py
+COPY alignment/server.py   /opt/server.py
+COPY service/batch.pl      /opt/batch.pl
 
 # Una specifica mancante o vuota deve far fallire la build, non produrre un
 # servizio che risponde "conforme" perche' non ha guardato niente.
@@ -71,8 +72,24 @@ RUN test "$(ls -1 /opt/specs/*.pl | wc -l)" -eq 7 \
  && ! grep -qs ':- dynamic' /opt/specs/*.pl \
  && for f in /opt/specs/*.pl; do test -s "$f"; done
 
+# Le regole di practice mode devono essere un sottoinsieme delle sette
+# compilate. Se un giorno si aggiunge una regola a practice.py e ci si
+# dimentica di scriverne la specifica, batch.pl non trova il file .pl, non
+# stampa nessuna riga per quella regola, e il servizio la marca come errore a
+# ogni passo: l'allievo vedrebbe un verdetto che non e' mai stato calcolato.
+# Meglio che la build si fermi qui.
+#
+# Una riga sola con python -c e non un heredoc: `RUN python - <<'PY'` pretende
+# BuildKit, e la build di Render non e' detto che lo abbia.
+RUN python -c "import pathlib,re,sys; src=pathlib.Path('/opt/practice.py').read_text(encoding='utf-8'); rules=re.findall(r'\"([^\"]+)\"', re.search(r'PRACTICE_RULES\s*=\s*\((.*?)\)', src, re.S).group(1)); specs={p.stem for p in pathlib.Path('/opt/specs').glob('*.pl')}; mancanti=[r for r in rules if r not in specs]; sys.exit('specifiche mancanti per: %s' % mancanti) if mancanti else print('practice: %d regole, tutte con la loro specifica' % len(rules))"
+
 ENV RML_MONITOR=/opt/rml
 ENV RML_SPECS=/opt/specs
+# Dove si scrivono lo spartito e la traccia: partitura e swipl li leggono da
+# file, ed e' l'unico punto in cui il servizio tocca il disco. /tmp e' la
+# cartella che ogni container ha per questo; senza la variabile il default
+# sarebbe /opt/scratch, che esiste ma non e' una cartella di lavoro.
+ENV CADENZA_TMPDIR=/tmp
 ENV PORT=8080
 
 # ── Thread: la cosa piu' importante di questo file ──────────────────

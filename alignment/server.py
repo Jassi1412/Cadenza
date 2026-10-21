@@ -1,12 +1,23 @@
-"""Endpoint unico di Cadenza: riceve l'esecuzione, restituisce i sette verdetti.
+"""Endpoint di Cadenza: riceve l'esecuzione e restituisce i verdetti.
 
-Il browser, a fine brano, manda lo spartito in MusicXML, l'elenco degli eventi
-che sono usciti da WebMIDI e il tempo al quale ha suonato. Qui lo spartito viene
-letto, le aspettative vengono messe accanto a quello che e' realmente successo,
-e i sette exit code dei monitor RML vengono letti.
+Tre rotte, tutte POST tranne il GET di cortesia:
+
+    /                modalita' normale: spartito + esecuzione intera -> sette
+                     verdetti. E' il verdetto a fine brano.
+    /practice        modalita' practice: spartito -> il PIANO di pratica, cioe'
+                     la sequenza dei passi. Si chiama una volta all'apertura.
+    /practice/step   modalita' practice: gli eventi suonati davanti a UN passo
+                     -> i verdetti delle regole che si applicano a quelle note,
+                     piu' la completezza del passo.
 
 Il verdetto e' interamente in Prolog: questo file non contiene nessuna soglia,
 nessuna classificazione, nessun giudizio. Fa solo il lavoro di trasporto.
+
+La completezza del passo NON e' un verdetto ed e' l'unica cosa di questo file che
+somiglia a una decisione: e' un confronto fra insiemi di pitch (le note che il
+piano dichiara per quel passo contro quelle premute), non una soglia su una
+grandezza. Serve a far avanzare il cursore senza aspettare il verdetto, che sul
+piano gratuito arriva in secondi. Il perche' per esteso sta in practice.py.
 
 Uso
     PORT=8080 python server.py
@@ -17,13 +28,14 @@ Uso
                "control_changes": [{"time_ms":0,"controller":64,"value":127}],
                "tempo_factor": 1.0}
 """
+import hashlib
 import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,11 +43,50 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 
 from join import ScoreModel, join, to_jsonl
+from practice import PRACTICE_RULES, SUSPENDED_RULES, PracticePlan, step_status, trace_for_step
 
 MONITOR = os.environ.get("RML_MONITOR", "/opt/rml")
 SPECS = os.environ.get("RML_SPECS", "/opt/specs")
 # batch.pl sta accanto a server.py: stessa directory, quindi stesso ROOT.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _find_batch():
+    """Dove sta batch.pl.
+
+    In produzione (Dockerfile) e' copiato accanto a server.py, in /opt: una
+    directory sola e ROOT basta. In sviluppo i due file stanno in cartelle
+    diverse — server.py in alignment/, batch.pl in service/ — e cercarlo solo
+    accanto a server.py significa che swipl non parte affatto, non stampa
+    nessuna riga per nessuna metrica, e il fallback qui sotto marca TUTTE le
+    regole come violate. Cioe' l'allievo legge "hai suonato male" quando invece
+    e' il servizio che non e' partito.
+
+    Si cerca, invece di copiare il file: una copia in piu' e' una copia che si
+    disallinea, e il .pl e' la fonte che deve restare una sola.
+    """
+    explicit = os.environ.get("CADENZA_BATCH")
+    if explicit:
+        return explicit
+    candidates = [os.path.join(ROOT, "batch.pl"),
+                  os.path.join(ROOT, "..", "service", "batch.pl")]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+
+BATCH = _find_batch()
+
+# Dove si scrivono lo spartito e la traccia, che partitura e swipl leggono da
+# file: e' l'unico punto in cui il servizio tocca il disco.
+#
+# Una cartella sola riusata, non un TemporaryDirectory per richiesta. Su Windows
+# cancellare una cartella temporanea con partitura che tiene ancora un handle
+# aperto fallisce con PermissionError, e il fallimento arriva DOPO che la
+# risposta e' stata calcolata, quindi sporca il log di un errore che non c'e'.
+# Ogni file ha un nome suo, ed e' la sua cancellazione a essere esplicita.
+SCRATCH = os.environ.get("CADENZA_TMPDIR") or os.path.join(ROOT, "scratch")
 
 # Le sette metriche. Ogni nome e' anche il file <nome>.pl in SPECS.
 METRICS = ("articulation", "chord-jitter", "dynamics-adherence", "pedal-toggle",
@@ -45,6 +96,121 @@ METRICS = ("articulation", "chord-jitter", "dynamics-adherence", "pedal-toggle",
 # spartiti corposi senza dare a un chiamante spazio per far saturare l'istanza
 # da solo, che su Render Free e' 512 MB condivisi con tutto il resto.
 MAX_BODY = 2 * 1024 * 1024
+
+
+def scratch_path(suffix):
+    """Un percorso di lavoro nuovo, nella cartella di scratch."""
+    os.makedirs(SCRATCH, exist_ok=True)
+    return os.path.join(SCRATCH, "%s%s" % (uuid.uuid4().hex, suffix))
+
+
+def unlink(path):
+    """Cancella un file di lavoro senza far fallire la richiesta se non riesce.
+
+    Su Windows un file ancora aperto da un altro processo non si cancella: e'
+    un residuo di qualche decina di KB, non un motivo per rispondere 400 a chi
+    ha suonato bene.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------- i piani
+
+# Lo spartito si legge una volta per sessione di pratica, non a ogni passo.
+#
+# Perche' una cache e non una richiesta che rimanda lo spartito ogni volta: il
+# piano si costruisce leggendo il MusicXML con partitura, che costa ~1,2 s di
+# import piu' ~70 ms di lettura, mentre un verdetto su un passo ne costa 170 in
+# locale. Senza cache, ogni pressione ripagherebbe la lettura dello spartito: e'
+# il costo che rende la modalita' inutilizzabile, non la verifica.
+#
+# Il limite non e' una scelta di prudenza: su Render Free l'istanza ha 512 MB e
+# ogni piano conserva il modello dello spartito in memoria. 8 sessioni
+# concorrenti sono piu' di quante ne regge l'istanza, e le piu' vecchie
+# scivolano fuori da sole (si rilegge lo spartito, non si sbaglia).
+PLANS = {}
+PLANS_LOCK = threading.Lock()
+MAX_PLANS = 8
+
+
+def _plan_key(score_xml):
+    return hashlib.sha256(score_xml.encode("utf-8")).hexdigest()
+
+
+def get_plan(score_xml):
+    """Il piano di pratica per questo spartito, dalla cache o costruendolo."""
+    key = _plan_key(score_xml)
+    with PLANS_LOCK:
+        cached = PLANS.get(key)
+        if cached is not None:
+            # riporta in testa: l'ordine di inserimento diventa ordine d'uso
+            PLANS.pop(key)
+            PLANS[key] = cached
+            return cached
+
+    # La costruzione sta FUORI dal lock: leggere uno spartito richiede ~70 ms e
+    # tenerlo bloccato mentre lo si fa serializzerebbe ogni sessione nuova su
+    # ogni altra. Due richieste simultanee sullo stesso spartito lo leggono due
+    # volte e scrivono lo stesso risultato: e' lavoro sprecato, non un errore.
+    plan = _build_plan(score_xml)
+
+    with PLANS_LOCK:
+        PLANS[key] = plan
+        while len(PLANS) > MAX_PLANS:
+            PLANS.pop(next(iter(PLANS)))
+    return plan
+
+
+def _build_plan(score_xml):
+    """Legge lo spartito e ne fa la sequenza di passi."""
+    score = scratch_path(".musicxml")
+    try:
+        with open(score, "w", encoding="utf-8") as f:
+            f.write(score_xml)
+        model = ScoreModel.from_musicxml(score)
+    finally:
+        unlink(score)
+    return PracticePlan(model)
+
+
+def _run_metrics(trace_path, metrics):
+    """I verdetti del monitor su una traccia, per le regole indicate.
+
+    Una specifica alla volta nella stessa VM Prolog: `match/2` viene importata in
+    `user` e una seconda specifica nella stessa VM fallisce al caricamento.
+    batch.pl se ne occupa e scrive "<nome> <exit>" per riga.
+    exit 0 = traccia conforme, 1 = violata, 2 = errore.
+    """
+    specs = []
+    for name in metrics:
+        specs += [name, os.path.join(SPECS, "%s.pl" % name)]
+    proc = subprocess.run(
+        ["swipl", "-O", "-p", "monitor=%s" % MONITOR,
+         BATCH, "--", trace_path] + specs,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    verdicts = {}
+    for line in proc.stdout.decode().splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[0] not in metrics:
+            continue
+        name, code = parts
+        verdicts[name] = (code == "0", int(code), "")
+    # Le regole di cui non si e' letta nemmeno una riga.
+    #
+    # exit 2 NON e' una violazione: e' il monitor che non e' partito (swipl
+    # mancante, batch.pl non trovato, una specifica che non compila). Confonderlo
+    # con exit 1 significa dire all'allievo che ha suonato male quando invece il
+    # servizio e' rotto, che e' il modo peggiore di fallire: l'errore diventa un
+    # giudizio sulla persona. Il frontend distingue i due casi proprio su questo
+    # codice, vedi useVerdict.
+    for name in metrics:
+        if name not in verdicts:
+            verdicts[name] = (False, 2, proc.stderr.decode()[-400:])
+    return verdicts
+
 
 
 def read_tempo_factor(body):
@@ -95,42 +261,90 @@ def validate(body):
 def analyse(body):
     notes, cc = validate(body)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        score = os.path.join(tmp, "score.musicxml")
-        trace = os.path.join(tmp, "trace.jsonl")
+    score = scratch_path(".musicxml")
+    trace = scratch_path(".jsonl")
+    try:
         with open(score, "w", encoding="utf-8") as f:
             f.write(body["score"])
-
         model = ScoreModel.from_musicxml(score)
         events = join(model, notes, read_tempo_factor(body), cc)
         with open(trace, "w", encoding="utf-8") as f:
             f.write(to_jsonl(events) + "\n")
+        verdicts = _run_metrics(trace, METRICS)
+    finally:
+        unlink(score)
+        unlink(trace)
+    return verdicts, events
 
-        # Le sette specifiche in un solo processo Prolog. Un processo SWI-Prolog
-        # regge una sola specifica RML (match/2 viene importata in `user`, e
-        # importarne una seconda nella stessa VM fallisce), quindi qui si
-        # caricano e si scaricano una alla volta dentro la stessa VM: le
-        # clausole sono identiche, cambia solo quante volte si avvia
-        # l'interprete. batch.pl se ne occupa e scrive "<nome> <exit>" per riga.
-        # exit 0 = traccia conforme, 1 = violata.
-        specs = []
-        for name in METRICS:
-            specs += [name, os.path.join(SPECS, "%s.pl" % name)]
-        proc = subprocess.run(
-            ["swipl", "-O", "-p", "monitor=%s" % MONITOR,
-             os.path.join(ROOT, "batch.pl"), "--", trace] + specs,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        verdicts = {}
-        for line in proc.stdout.decode().splitlines():
-            parts = line.split()
-            if len(parts) != 2 or parts[0] not in METRICS:
-                continue
-            name, code = parts
-            verdicts[name] = (code == "0", int(code), "")
-        for name in METRICS:
-            if name not in verdicts:
-                verdicts[name] = (False, 2, proc.stderr.decode()[-400:])
-        return verdicts, events
+
+def practise_step(body):
+    """Un passo di pratica: la traccia di quel passo, e cosa ne dicono le regole.
+
+    Il PIANO non si ricostruisce da zero se e' in cache, e il cursore non
+    aspetta questo verdetto per avanzare (vedi practice.py): qui si risponde a
+    "come l'hai suonato", non a "puoi andare avanti".
+    """
+    if not isinstance(body.get("score"), str) or "<" not in body["score"]:
+        raise ValueError("manca lo spartito MusicXML")
+
+    events = body.get("events")
+    if not isinstance(events, list):
+        raise ValueError("manca l'elenco degli eventi")
+
+    plan = get_plan(body["score"])
+    index = int(body.get("step", 0))
+    if not 0 <= index < len(plan):
+        raise ValueError("passo %d fuori dal brano (0-%d)"
+                         % (index, len(plan) - 1))
+
+    # Gli eventi arrivano grezzi dal canale MIDI e vanno normalizzati come nella
+    # modalita' normale: un campo malformato deve dare un 400 chiaro, non una
+    # traccia costruita a meta'.
+    clean = []
+    for e in events:
+        if not isinstance(e, dict):
+            raise ValueError("evento malformato")
+        try:
+            clean.append({"type": str(e["type"]), "pitch": int(e["pitch"]),
+                          "velocity": int(e.get("velocity") or 0),
+                          "time_ms": float(e["time_ms"])})
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("evento malformato: servono type, pitch, time_ms")
+    clean.sort(key=lambda e: e["time_ms"])
+
+    cc = []
+    for c in body.get("control_changes") or []:
+        try:
+            cc.append({"time_ms": float(c["time_ms"]),
+                       "controller": int(c["controller"]), "value": int(c["value"])})
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("control change malformato")
+
+    trace = trace_for_step(plan, index, clean, cc)
+    status = step_status(plan, index, clean)
+
+    verdicts = {}
+    if trace:
+        # Nessuna nota premuta: non c'e' niente da giudicare e non si avvia
+        # Prolog. Il caso non e' un errore, e' l'allievo che non ha ancora
+        # toccato la tastiera: rispondere "tutto conforme" su una traccia vuota
+        # sarebbe la bugia peggiore, e le regole non hanno niente da dire.
+        path = scratch_path(".jsonl")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(to_jsonl(trace) + "\n")
+            verdicts = _run_metrics(path, PRACTICE_RULES)
+        finally:
+            unlink(path)
+
+    return {
+        "step": index,
+        "total": len(plan),
+        "status": status,
+        "verdicts": {k: {"ok": v[0], "exit": v[1]} for k, v in verdicts.items()},
+        "suspended": SUSPENDED_RULES,
+        "stderr": {k: v[2] for k, v in verdicts.items() if v[2].strip()},
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -158,7 +372,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        self._send(200, {"service": "cadenza", "metrics": list(METRICS)})
+        # Il GET di cortesia dice anche quali regole girano in pratica: e' la
+        # stessa informazione che il piano manda al frontend, e serve a
+        # verificare da fuori che il servizio deployato sia quello giusto.
+        self._send(200, {
+            "service": "cadenza",
+            "metrics": list(METRICS),
+            "practice": {
+                "rules": list(PRACTICE_RULES),
+                "suspended": SUSPENDED_RULES,
+            },
+        })
 
     def do_POST(self):
         try:
@@ -166,6 +390,21 @@ class Handler(BaseHTTPRequestHandler):
             if n <= 0 or n > MAX_BODY:
                 return self._send(413, {"error": "corpo fuori dai limiti"})
             body = json.loads(self.rfile.read(n))
+
+            path = self.path.split("?")[0].rstrip("/") or "/"
+            if path == "/practice":
+                if not isinstance(body.get("score"), str) or "<" not in body["score"]:
+                    raise ValueError("manca lo spartito MusicXML")
+                plan = get_plan(body["score"])
+                return self._send(200, {
+                    "total": len(plan),
+                    "steps": plan.all_events(),
+                    "rules": list(PRACTICE_RULES),
+                    "suspended": SUSPENDED_RULES,
+                })
+            if path == "/practice/step":
+                return self._send(200, practise_step(body))
+
             verdicts, events = analyse(body)
             self._send(200, {
                 "events": len(events),
