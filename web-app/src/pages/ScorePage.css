@@ -253,6 +253,33 @@
   50% { opacity: 0.4; }
 }
 
+/* ── Gli stati d'attesa della pratica ──
+ * Ripetono la striscia della barra dei comandi (`.practice-bar`, in
+ * PracticeBar.css, importato da questa pagina) invece di avere un box loro: quando
+ * i passi diventano pronti cambia solo il contenuto della riga, la posizione no.
+ * L'altezza e' libera perche' il testo dell'attesa MIDI e' piu' lungo di una riga
+ * su uno schermo stretto, e un messaggio tagliato a meta' non dice niente. */
+.practice-notice {
+  height: auto;
+  min-height: 2.4rem;
+  padding: 0.45rem 1rem;
+  gap: 1rem;
+}
+
+.practice-notice p {
+  flex: 1;
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  font-size: 0.6875rem;
+  color: var(--text-secondary, #6b6357);
+}
+
+.practice-notice-bad p {
+  color: #8b2f2f;
+}
+
 /* ── Mobile Layout Adjustments ── */
 @media (max-width: 768px) {
   .sheet-container {

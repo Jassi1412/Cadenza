@@ -4,9 +4,9 @@ import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
-import { pressedPitches } from '../hooks/practiceSteps';
+import { pressedPitches, stepProblem } from '../hooks/practiceSteps';
 import PlaybackBar from '../components/PlaybackBar';
-import PracticePanel from '../components/PracticePanel';
+import PracticeBar from '../components/PracticeBar';
 import './ScorePage.css';
 
 // Module-level refs for dynamic imports
@@ -328,11 +328,19 @@ const ScorePage: React.FC = () => {
   // pitch non e' usabile, perche' OSMD riporta le note tre ottave sotto rispetto
   // al piano, e un offset scritto nel codice cambierebbe col prossimo spartito.
   // Vedi la funzione `moveCursorToStep` per la misura.
+  //
+  // LA POSIZIONE DA RAGGIUNGERE E' `attack`, NON `index`. Il cursore di OSMD
+  // cammina su TUTTI gli attacchi della partitura; un esercizio a mano sola ne
+  // salta una parte, e allora il quinto passo dell'esercizio non e' piu' la quinta
+  // fermata del rigo: il servizio lo sa e lo manda gia' scritto nel passo. Passare
+  // `index` con una mano sola non da' nessun errore: il segno si posiziona sulla
+  // nota sbagliata due volte su tre, e l'allievo suona quella che vede.
   useEffect(() => {
     if (!isPractice || practice.phase !== 'ready') return;
-    if (!practice.steps[practice.index]) return;
+    const passo = practice.steps[practice.index];
+    if (!passo) return;
     cursorStepRef.current = moveCursorToStep(
-      osmdRef.current, practice.index, cursorStepRef.current,
+      osmdRef.current, passo.attack, cursorStepRef.current,
     );
   }, [isPractice, practice.phase, practice.index, practice.steps]);
 
@@ -637,6 +645,17 @@ const ScorePage: React.FC = () => {
 
   // ── Render ─────────────────────────────────────────
 
+  // La riga compatta del verdetto. La decisione di COSA mostrare sta nel modulo
+  // puro (`stepProblem`), dove i test la provano: qui non c'e' nessuna soglia e
+  // nessun giudizio, come recita il contratto di questa cartella.
+  const problem = stepProblem({
+    last: practice.last,
+    stepIndex: practice.index,
+    judging: practice.judging,
+    error: practice.error,
+    dynamicsOn: practice.dynamicsOn,
+  });
+
   if (error) {
     return (
       <div className="score-page container">
@@ -667,55 +686,54 @@ const ScorePage: React.FC = () => {
         )}
       </div>
 
-      {/* Pannello della pratica. Sta al posto dei verdetti, non accanto: sono
-          due modi diversi di giudicare la stessa esecuzione, e mostrarli
-          insieme farebbe credere che il verdetto a fine brano valga anche qui. */}
+      {/* Gli stati della pratica: la barra dei comandi quando si suona, una riga
+          di avviso mentre si aspetta o quando qualcosa e' andato storto. Sta al
+          posto dei verdetti, non accanto: sono due modi diversi di giudicare la
+          stessa esecuzione, e mostrarli insieme farebbe credere che il verdetto a
+          fine brano valga anche qui. */}
       {isPractice && (practice.phase !== 'idle' || preparing !== null) && (
         preparing === 'midi' ? (
           /* L'attesa del permesso. Il browser ha aperto una finestra di
              conferma: se nessuno risponde, questa resta l'unica cosa che si
              vede, ed e' gia' il motivo per cui non succede nient'altro. */
-          <section className="practice-panel">
-            <div className="practice-panel-head">
-              <h2 className="heading">Pratica</h2>
-              <button className="btn btn-outline" onClick={stopPractice}>Chiudi</button>
-            </div>
-            <p className="practice-idle">
+          <section className="practice-bar practice-notice">
+            <p>
               Concedi il permesso alla tastiera MIDI per suonare i passi. La
               domanda del browser potrebbe essere gia' aperta dietro questa finestra.
             </p>
+            <button className="pb-chip" onClick={stopPractice}>Exit</button>
           </section>
         ) : preparing === 'piano' ? (
-          <section className="practice-panel">
-            <p className="practice-idle">Sto leggendo lo spartito e preparando i passi…</p>
+          <section className="practice-bar practice-notice">
+            <p>Sto leggendo lo spartito e preparando i passi…</p>
           </section>
         ) : practice.phase === 'error' ? (
-          <section className="practice-panel">
-            <div className="practice-panel-head">
-              <h2 className="heading">Pratica</h2>
-              <button className="btn btn-outline" onClick={stopPractice}>Chiudi</button>
-            </div>
-            <p className="practice-error">
+          <section className="practice-bar practice-notice practice-notice-bad">
+            <p>
               {practice.error ?? 'Non sono riuscito a preparare i passi di questo spartito.'}
             </p>
+            <button className="pb-chip" onClick={stopPractice}>Exit</button>
           </section>
         ) : practice.phase === 'loading' ? (
-          <section className="practice-panel">
-            <p className="practice-idle">Sto leggendo lo spartito e preparando i passi…</p>
+          <section className="practice-bar practice-notice">
+            <p>Cambio mano e preparo di nuovo i passi…</p>
           </section>
         ) : (
-          <PracticePanel
+          <PracticeBar
             stepIndex={practice.index}
             total={practice.steps.length}
-            measure={practice.steps[practice.index]?.measure ?? 1}
+            measure={practice.steps[practice.index]?.measure ?? 0}
             expected={practice.steps[practice.index]?.pitch ?? []}
             status={practice.status}
-            last={practice.last}
+            problem={problem}
             verdictStep={practice.verdictStep}
-            suspended={practice.suspended}
             judging={practice.judging}
+            hand={practice.hand}
+            hands={practice.hands}
+            onHandChange={(h) => void practice.setHand(h)}
             dynamicsOn={practice.dynamicsOn}
             onDynamicsChange={practice.setDynamicsOn}
+            suspended={practice.suspended}
             /* Un errore di rete non ferma l'esercizio: si segnala qui e si
                continua a suonare. Interrompere un allievo per un problema del
                servizio sarebbe la cosa peggiore che questa pagina possa fare. */

@@ -170,6 +170,14 @@ class ScoreModel:
                         and n["articulation"] in (None, "tenuto")):
                     n["articulation"] = "legato"
 
+        # Mani: la <voice> e' cio' che separa le due mani, il <staff> dice quale
+        # rigo porta. partitura ha la voce per ogni riga della sua tabella, quindi
+        # la mappa voice -> rigo (sotto) si applica qui e il campo "staff" resta
+        # sulla nota: e' quello che legge practice.py per escludere una mano.
+        hands = cls._read_hands(path)
+        for n in notes:
+            n["staff"] = hands.get(str(n["voice"]))
+
         # Gruppi di note simultanee NELLO SPARTITO: due note con lo stesso
         # attacco sono premute nello stesso istante, quindi vanno insieme.
         # L'id deriva dal solo spartito, mai dall'esecuzione: se lo ricavassi da
@@ -481,6 +489,45 @@ class ScoreModel:
             spans.append({"start": at, "end": float("inf")})
         spans.sort(key=lambda x: x["start"])
         return spans
+
+    @staticmethod
+    def _read_hands(path):
+        """voice -> numero di rigo dichiarato dal file (1 = sopra, 2 = sotto).
+
+        PERCHE' PER VOCE e non per la singola <staff>. Il <staff> dice su quale
+        rigo la nota e' SCRITTA; nella scrittura pianistica la mano che valica il
+        rigo (cross-staff) cambia rigo restando della stessa mano, mentre le due
+        mani sono separate dalla <voice>: e' quello che usano gli editor, ed e' la
+        cosa piu' vicina alla mano fisica. Si prende il rigo DOMINANTE di ogni
+        voce, cosi' una voce che per un momento finisce sull'altro rigo non
+        cambia mano.
+
+        Ritorna {} quando il file non permette di separare le mani: niente
+        <staff> (pezzo a un rigo solo) oppure niente <voice> (le note sono tutte
+        in una voce, e allora non c'e' nessuna chiave per dire quale meta' del
+        brano sia la destra). In quel caso l'app tiene il filtro mano spento e
+        dichiarato, invece di indovinare.
+        """
+        from collections import Counter
+        from lxml import etree
+
+        tree = etree.parse(path)
+        root = tree.getroot()
+
+        per_voice = {}
+        for note in root.iter("note"):
+            v = note.findtext("voice")
+            st = note.findtext("staff")
+            if v is None or st is None:
+                continue
+            try:
+                staff_n = int(st)
+            except ValueError:
+                continue
+            per_voice.setdefault(str(v).strip(), Counter())[staff_n] += 1
+
+        # il rigo piu' frequente per ogni voce: e' la sua mano
+        return {v: cnt.most_common(1)[0][0] for v, cnt in per_voice.items()}
 
     # ------------------------------------------------------------- le query
 

@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { MidiEvent } from './useMidi';
 import { API_URL } from './useVerdict';
 import { stepStatus } from './practiceSteps';
-import type { PracticeStep, StepStatus } from './practiceSteps';
+import type { PracticeStep, StepStatus, StepVerdict } from './practiceSteps';
 
 // Le regole dell'esercizio (completezza del passo, pitch premuti, nomi delle
 // note) stanno in practiceSteps.ts: sono pure, non toccano React ne' la rete, e
@@ -13,7 +13,7 @@ import type { PracticeStep, StepStatus } from './practiceSteps';
 // quale dei due file sta cosa; le funzioni no, e chi le vuole importa il modulo
 // puro — cosi' un test che le prova non tira dentro React, `import.meta.env` e
 // la rete.
-export type { PracticeStep, StepStatus } from './practiceSteps';
+export type { PracticeStep, StepStatus, StepVerdict, VerdictsSnapshot } from './practiceSteps';
 
 /**
  * La modalita' practice: lo spartito a passi, e il verdetto di ogni passo.
@@ -51,14 +51,33 @@ export type { PracticeStep, StepStatus } from './practiceSteps';
  * regola sono identiche. Verificato su traccia vera in alignment/_probe_practice.py.
  */
 
-export interface StepVerdict {
-  ok: boolean;
-  exit: number;
+// `StepVerdict` non e' dichiarato qui: vive in practiceSteps.ts, dove lo provano i
+// test sulle regole. Ri-dichiararlo identico in due file e' il modo classico per
+// farli divergere al primo cambiamento.
+
+/** La mano su cui si sta studiando: null = il brano intero, come prima. */
+export type PracticeHand = 'right' | 'left' | null;
+
+/**
+ * Che cosa questo spartito permette di separare, dichiarato dal servizio.
+ *
+ * `split: false` vuol dire che il file non dichiara i righi: non c'e' nessuna
+ * destra da isolare, e il toggle deve restare spento e spiegato, non spento e
+ * basta. Sarebbe la stessa bugia di un tasto che sembra regolabile mentre non
+ * regola niente (vedi la scelta del cursore del tempo nascosto in pratica).
+ */
+export interface HandInfo {
+  right: number;
+  left: number;
+  unknown: number;
+  split: boolean;
 }
 
 export interface StepResult {
   step: number;
   total: number;
+  /** la mano su cui il servizio ha costruito i passi, null per il brano intero */
+  hand: PracticeHand;
   status: StepStatus;
   verdicts: Record<string, StepVerdict>;
   /** le regole che in questa modalita' non si applicano, con il motivo */
@@ -89,6 +108,27 @@ export interface UsePracticeReturn {
    */
   dynamicsOn: boolean;
   setDynamicsOn: (on: boolean) => void;
+  /**
+   * La mano su cui si sta studiando. `null` = il brano intero.
+   *
+   * Il filtro mano NON e' come quello della dinamica, e la differenza va mantenuta
+   * separata perche' sono due meccanismi opposti:
+   *
+   *   `dynamicsOn` filtra la VISTA. Il servizio ha gia' giudicato tutto; qui si
+   *                decide solo quale verdetto mostrare, e accenderlo non costa un
+   *                giro di rete.
+   *   `hand` cambia l'ESERCIZIO. Cambia quanti passi ci sono, quali tasti chiede
+   *                ogni passo, cosa fa avanzare il cursore e quali eventi finiscono
+   *                nella traccia che va a Prolog (vedi `alignment/practice.py`).
+   *                Per questo cambiarla richiede di chiedere un piano nuovo: tenere
+   *                lo stesso elenco di passi vorrebbe dire suonare la mano destra
+   *                venendo giudicati su quella sinistra.
+   */
+  hand: PracticeHand;
+  /** che cosa questo spartito permette di separare; null finche' non si e' risposto */
+  hands: HandInfo | null;
+  /** cambia mano e ricostruisce i passi; riparte dal passo 0 */
+  setHand: (hand: PracticeHand) => Promise<void>;
   /**
    * Lo stato del passo corrente, calcolato IN LOCALE e aggiornato subito.
    *
@@ -131,6 +171,14 @@ export function usePractice(): UsePracticeReturn {
   // la regola, e soprattutto metterebbe nella richiesta una scelta di
   // presentazione: il giudizio resta di RML, cosa guardarlo e' dell'allievo.
   const [dynamicsOn, setDynamicsOn] = useState(true);
+  // La mano su cui si studia: null = brano intero. `handRef` esiste perche' i
+  // callback (`ask`, `loadPlan`) sono creati una volta sola con `useCallback([])`
+  // e leggerebbero lo stato vecchio: la richiesta di verdetto deve portare la STESSA
+  // mano su cui il piano e' stato costruito, o il passo numero 5 della mano sinistra
+  // verrebbe giudicato contro il passo numero 5 del brano intero.
+  const [hand, setHandState] = useState<PracticeHand>(null);
+  const [hands, setHands] = useState<HandInfo | null>(null);
+  const handRef = useRef<PracticeHand>(null);
   // Lo stato del passo corrente, tenuto qui e aggiornato a ogni submit.
   //
   // Perche' non si ricava a render-time da `midi.recording`: quel valore e' la
@@ -166,15 +214,21 @@ export function usePractice(): UsePracticeReturn {
   const busy = useRef(false);
   const pending = useRef<readonly MidiEvent[] | null>(null);
 
-  const start = useCallback(async (scoreXml: string) => {
-    scoreRef.current = scoreXml;
+  // Costruisce (o ricostruisce) i passi per la mano corrente.
+  //
+  // Sta separata da `start` perche' il piano va chiesto di nuovo ogni volta che
+  // cambia la mano: il filtro non e' una presentazione, e' un esercizio diverso —
+  // numero di passi diverso, tasti chiesti diversi, cursore che punta ad altri
+  // attacchi. Tenere l'elenco vecchio vorrebbe dire suonare la destra ed essere
+  // giudicati sulla sinistra.
+  const loadPlan = useCallback(async (scoreXml: string) => {
     setPhase('loading');
     setError(null);
     try {
       const res = await fetch(`${API_URL}/practice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score: scoreXml }),
+        body: JSON.stringify({ score: scoreXml, hand: handRef.current ?? 'both' }),
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? `il servizio ha risposto ${res.status}`);
@@ -185,6 +239,9 @@ export function usePractice(): UsePracticeReturn {
       setSteps(list);
       setRules((payload.rules ?? []) as string[]);
       setSuspended((payload.suspended ?? {}) as Record<string, string>);
+      // Che cosa si puo' separare in questo spartito: il toggle della mano legge
+      // questi numeri per accendersi o per restare spento e dichiarato.
+      setHands((payload.hands ?? null) as HandInfo | null);
       setIndex(0);
       setVerdictStep(0);
       setLast(null);
@@ -196,6 +253,23 @@ export function usePractice(): UsePracticeReturn {
       setPhase('error');
     }
   }, []);
+
+  const start = useCallback(async (scoreXml: string) => {
+    scoreRef.current = scoreXml;
+    await loadPlan(scoreXml);
+  }, [loadPlan]);
+
+  const setHand = useCallback(async (next: PracticeHand) => {
+    // Un pezzo che non dichiara i righi non ha una destra da isolare: la scelta non
+    // viene nemmeno registrata. Un toggle che accetta una selezione e poi non puo'
+    // produrre niente e' solo un modo per far credere che stia succedendo qualcosa.
+    if (hands && !hands.split && next !== null) return;
+    const score = scoreRef.current;
+    handRef.current = next;
+    setHandState(next);
+    if (!score) return;
+    await loadPlan(score);
+  }, [hands, loadPlan]);
 
   const ask = useCallback(async (stepIndex: number, events: readonly MidiEvent[]) => {
     const score = scoreRef.current;
@@ -209,6 +283,11 @@ export function usePractice(): UsePracticeReturn {
         body: JSON.stringify({
           score,
           step: stepIndex,
+          // La stessa mano del piano, letta dal ref e non dallo stato: chiedere il
+          // verdetto con la mano sbagliata e' un errore silenzioso. Il servizio
+          // costruirebbe i passi su un'altra mano e giudicherebbe note che
+          // l'allievo non stava cercando di suonare.
+          hand: handRef.current ?? 'both',
           // Gli eventi vanno come li manda Web MIDI, con la loro forma:
           // l'accoppiamento attacco/rilascio lo fa il servizio, in un posto solo.
           //
@@ -298,6 +377,12 @@ export function usePractice(): UsePracticeReturn {
     setError(null);
     setRules([]);
     setSuspended({});
+    // La mano si azzera insieme alla sessione: rientrare nella pratica deve trovare
+    // il brano intero, non la mano sinistra scelta l'ultima volta. Senza questo, il
+    // primo passo di una sessione nuova sarebbe uno solo e sembrerebbe un guasto.
+    setHandState(null);
+    setHands(null);
+    handRef.current = null;
     scoreRef.current = null;
     pending.current = null;
   }, []);
@@ -305,6 +390,7 @@ export function usePractice(): UsePracticeReturn {
   return {
     phase, steps, index, error, rules, suspended,
     dynamicsOn, setDynamicsOn,
+    hand, hands, setHand,
     // Lo stato vale solo per il passo a cui si riferisce: se il cursore e' gia'
     // passato oltre, mostrarlo sui tasti del passo nuovo sarebbe sbagliato.
     status: statusStep === index ? status : null,

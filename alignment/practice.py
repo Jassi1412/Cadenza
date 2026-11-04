@@ -68,6 +68,36 @@ di 30 ms — cioe' ogni accordo premuto con calma, il comportamento normale di c
 sta imparando (verificato: accordo a 500 ms -> VIOLATA, a 15 ms -> ok). La
 specifica e' corretta; cambia il suo ruolo qui, ed e' giusto che una regola
 segnali invece di bloccare.
+
+
+IL FILTRO PER MANO (destra o sinistra sola)
+
+L'allievo puo' voler studiare solo un rigo. Il filtro non e' una presentazione:
+cambia cosa si chiede, cosa fa avanzare il cursore e cosa si giudica, quindi sta
+qui insieme al piano. Tre conseguenze, tutte volute:
+
+  IL PASSO cambia insieme. Un passo e' l'istante di partitura: con una mano sola
+  contiene solo le note di quella mano, e i passi senza note di quella mano non
+  esistono proprio. Il brano per la destra ha 128 passi su quello di prova, per la
+  sinistra 88: non e' lo stesso elenco filtrato a schermo, e' un esercizio diverso.
+
+  L'INDICE ASSOLUTO DELL'ATTACCO viaggia nel passo (`attack`). Il cursore di OSMD
+  conta gli attacchi del rigo completo nell'ordine in cui li disegna, quindi il
+  passo k della mano sinistra NON e' l'attacco k dello spartito: senza questo
+  numero il cursore finrebbe sul punto sbagliato a ogni salto.
+
+  L'ALTRA MANO non e' una nota sbagliata. Se while studi la destra premi anche il
+  Fa#2 che lo spartito chiede alla sinistra, quello non e' un errore: e' una nota
+  fuori dall'esercizio. viene messa in `other_hand`, dichiarata al frontend per
+  NON farla sparire nel silenzio, e tolta dalla traccia che va a Prolog, perche'
+  chord-jitter confronta gli attacchi per `chordId` e un attacco dell'altra mano
+  nello stesso istante direbbe "arrivo insieme" anche se la mano studiata e'
+  arpeggiata.
+
+Le mani si leggono dal file con la mappa voice -> rigo (`ScoreModel._read_hands`,
+spiegata li'): il rigo dominante di ogni voce e' la sua mano, perche' la mano che
+valica il rigo resta la stessa mano. Se il file non separa le mani il servizio lo
+dice (`hands.split = false`) e l'app tiene il filtro spento e dichiarato.
 """
 
 import bisect
@@ -105,17 +135,44 @@ class PracticePlan:
     che rende chord-jitter misurabile: se il passo fosse una singola nota, il
     ritardo fra le note dell'accordo sarebbe quello con cui l'allievo le cerca e
     la regola non avrebbe piu' niente da dire.
+
+    Con `hand` impostata, la stessa definizione vale per UNA mano sola: il passo
+    contiene le note di quella mano in quell'istante, e gli istanti in cui quella
+    mano non ha niente da suonare non sono passi.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, hand=None):
+        """`hand`: None = tutte le mani, 'right' o 'left' = una sola.
+
+        Con una mano il piano e' piu' corto, e ogni passo porta `attack`: l'indice
+        del suo attacco nell'elenco COMPLETO degli attacchi dello spartito. Serve
+        perche' il cursore di OSMD conta gli attacchi del rigo completo nell'ordine
+        in cui li disegna, quindi il passo k della mano sinistra NON e' l'attacco k
+        dello spartito. Senza questo numero, al salto successivo il cursore si
+        fermerebbe sul punto sbagliato.
+        """
         self.model = model
+        self.hand = hand if hand in ("right", "left") else None
+        wanted = {"right": 1, "left": 2}.get(self.hand)
         onsets = sorted({n["onset"] for n in model.notes})
         self.steps = []
         for i, onset in enumerate(onsets):
             note = [n for n in model.notes if n["onset"] == onset]
+            # Una mano sola: restano le note di quella mano piu' quelle senza rigo
+            # riconosciuto, che non si possono escludere con certezza. Un istante
+            # senza note della mano scelta non e' un passo: l'esercizio passa
+            # direttamente al punto dopo.
+            keep = [n for n in note if wanted is None
+                    or n.get("staff") in (wanted, None)]
+            if not keep:
+                continue
+            keep_pitches = {n["pitch"] for n in keep}
             self.steps.append({
-                "index": i,
-                "notes": note,
+                # `index` e' la posizione nell'esercizio, `attack` il punto dello
+                # spartito: con una mano sola i due numeri non coincidono piu'.
+                "index": len(self.steps),
+                "attack": i,
+                "notes": keep,
                 "onset": onset,
                 "measure": model.measure_at(onset),
                 "articulation": model.articulation_at(onset),
@@ -127,7 +184,17 @@ class PracticePlan:
                 # volte sarebbe una richiesta che non ha senso fisico. La lista
                 # con le ripetizioni resta in `notes`, che serve ai campi di
                 # expected (chordMates) dove le occorrenze contano.
-                "pitches": sorted({n["pitch"] for n in note}),
+                "pitches": sorted(keep_pitches),
+                # L'altra mano, sullo stesso istante. Non e' un errore se la
+                # premi, e non deve finire nella traccia che guarda Prolog:
+                # chord-jitter confronta gli attacchi per `chordId`, quindi un
+                # attacco dell'altra mano nello stesso istante direbbe "arrivano
+                # insieme" anche se la mano studiata e' arpeggiata.
+                "offhand": sorted({n["pitch"] for n in note
+                                   if wanted is not None
+                                   and n.get("staff") not in (wanted, None)
+                                   and n["pitch"] not in keep_pitches}),
+                "hand": self.hand,
             })
 
     def __len__(self):
@@ -139,13 +206,21 @@ class PracticePlan:
         `pitch` e' la lista dei tasti da premere: il frontend la usa per
         evidenziare i tasti e per decidere quando il passo e' completo, non per
         giudicare. Il giudizio e' sempre di RML.
+
+        `attack` e' l'indice di questo attacco nello spartito completo: con una
+        mano sola il frontend ne ha bisogno perche' il cursore di OSMD conta gli
+        attacchi del rigo completo, mentre `index` conta solo i passi dell'esercizio.
+        `offhand` sono i tasti dell'altra mano sullo stesso istante: il frontend li
+        dichiara invece di lasciarli nel silenzio.
         """
         step = self.steps[index]
         return {
             "index": index,
             "total": len(self.steps),
+            "attack": step["attack"],
             "measure": step["measure"],
             "pitch": step["pitches"],
+            "offhand": step["offhand"],
             "articulation": step["articulation"],
         }
 
@@ -159,6 +234,28 @@ class PracticePlan:
         calcolato. Il verdetto, quello, arriva dopo.
         """
         return [self.event_at(i) for i in range(len(self.steps))]
+
+
+# --------------------------------------------------------------- le mani
+
+
+def hand_summary(model):
+    """Quante note ha ogni mano, e se questo file le separa davvero.
+
+    Il frontend usa questi numeri per accendere o spegnere il filtro mano. Se il
+    file non dichiara i righi (`split: false`) non c'e' nessuna destra da isolare:
+    il toggle resta spento e detto perche', invece di sparire o di funzionare a
+    caso su meta' brano scelto a caso.
+
+    `unknown` conta le note senza un rigo riconosciuto: con una mano sola restano
+    dentro l'esercizio, perche' escludere una nota senza certezza vuol dire chiedere
+    all'allievo di saltare un tasto che lo spartito voleva.
+    """
+    right = sum(1 for n in model.notes if n.get("staff") == 1)
+    left = sum(1 for n in model.notes if n.get("staff") == 2)
+    unknown = sum(1 for n in model.notes if n.get("staff") is None)
+    return {"right": right, "left": left, "unknown": unknown,
+            "split": right > 0 and left > 0}
 
 
 # --------------------------------------------------------------- la traccia
@@ -186,6 +283,14 @@ def _annotation(model, pitch, step):
     e = model.expected_at(onset)
     near, dist = model.nearest(step["pitches"], pitch)
     chord_mates = model.chord_mates(onset, near)
+
+    # Con una mano sola i compagni d'accordo sono solo quelli di quella mano. La
+    # lista dei compagni e' esattamente cio' che chord-jitter usa per decidere
+    # quali attacchi dovevano arrivare insieme, e un compagno dell'altra mano non
+    # fa parte dell'esercizio: stessi criteri della traccia, spiegati sotto.
+    if step.get("hand"):
+        expected_pitches = set(step["pitches"])
+        chord_mates = [p for p in chord_mates if p in expected_pitches]
 
     # ATTENZIONE, e' la stessa regola di join(): se lo spartito in quel punto non
     # prevede nessuna nota, pitchDist None farebbe passare la nota per
@@ -279,13 +384,20 @@ def step_status(plan, index, events):
     expected = step["pitches"]
     premuti = {n["pitch"] for n in pressed_notes(events)}
     mancanti = [p for p in expected if p not in premuti]
-    estranei = sorted(p for p in premuti if p not in expected)
+    # Con una mano sola, un tasto dell'altra mano premuto sullo stesso istante non
+    # e' ne' atteso ne' estraneo: e' fuori dall'esercizio. Va dichiarato lo stesso,
+    # perche' un conteggio che lo ignora in silenzio fa sembrare che l'allievo non
+    # l'abbia premuto, e invece lo ha premuto eccome.
+    other = sorted(p for p in premuti if p in (step.get("offhand") or ()))
+    estranei = sorted(p for p in premuti
+                      if p not in expected and p not in other)
     return {
         "advance": not mancanti,
         "expected": expected,
         "pressed": sorted(premuti),
         "missing": mancanti,
         "extra": estranei,
+        "other_hand": other,
     }
 
 
@@ -300,6 +412,16 @@ def trace_for_step(plan, index, events, control_changes=None):
     step = plan.steps[index]
     model = plan.model
     notes = pressed_notes(events)
+
+    # Con una mano sola gli attacchi dell'altra mano non descrivono l'esercizio:
+    # vanno tolti dalla traccia, non giudicati. chord-jitter confronta gli attacchi
+    # per `chordId`, quindi un attacco dell'altra mano nello stesso istante
+    # direbbe "arrivano insieme" anche se la mano studiata e' arpeggiata;
+    # dynamics-adherence e pitch-agreement guardano il singolo attacco ma la
+    # traccia deve raccontare l'esercizio, non due mani di cui una non c'entra.
+    off = set(step.get("offhand") or ())
+    if off:
+        notes = [n for n in notes if n["pitch"] not in off]
 
     attacchi = sorted({n["time_ms"] for n in notes})
 

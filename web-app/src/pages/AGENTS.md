@@ -8,7 +8,7 @@ Top-level page components — one per application route. Each page composes hook
 
 - `HomePage.tsx` / `.css` — Landing page. Minimal hero section with the Cadenza logo and a single CTA linking to `/upload`.
 - `UploadPage.tsx` / `.css` — Score upload screen. Drag-and-drop or browse for a MusicXML file (`.xml`, `.musicxml`, `.mxl`). Hosts the `MidiPanel` so the user can connect a MIDI device before opening the score. Passes the selected `File`, `midiEnabled`, and `midiInputId` to `/score` via `react-router-dom` `location.state`.
-- `ScorePage.tsx` / `.css` — The main score viewer, play-along surface, and step-by-step practice surface. Dynamically imports `@music-i18n/musicxml-player` (Player + OSMD renderer + Verovio converter). Owns the take lifecycle as an explicit state machine, `phase: 'idle' | 'countdown' | 'playing'`: a countdown holds the player while the musician gets to the keyboard, then the score plays and the keyboard is recorded, then the verdict posts itself. Composes `PlaybackBar`, `PracticePanel`, `useMidi`, `useVerdict`, and `usePractice`. The verdict panel shows each rule by its English name (the `.rml` filename).
+- `ScorePage.tsx` / `.css` — The main score viewer, play-along surface, and step-by-step practice surface. Dynamically imports `@music-i18n/musicxml-player` (Player + OSMD renderer + Verovio converter). Owns the take lifecycle as an explicit state machine, `phase: 'idle' | 'countdown' | 'playing'`: a countdown holds the player while the musician gets to the keyboard, then the score plays and the keyboard is recorded, then the verdict posts itself. Composes `PlaybackBar`, `PracticeBar`, `useMidi`, `useVerdict`, and `usePractice`. The verdict panel shows each rule by its English name (the `.rml` filename).
 - `MetricsTestPage.tsx` / `.css` — REMOVED. It recomputed six metrics in TypeScript with thresholds hardcoded in the page (`LEGATO_GAP_MS = 30`, attack ≥ 80, chord 30 ms, pedal 200 ms), duplicating the ones inside the RML `.rml` specs. Two copies of the same number diverge as soon as one is edited. Verdicts come from the service via `useVerdict` and are rendered by `ScorePage`; a removed page must not be reintroduced as an in-browser reimplementation.
 
 ## Local Contracts
@@ -28,7 +28,7 @@ Top-level page components — one per application route. Each page composes hook
 
 ### The two modes are separate on purpose
 
-- `isPractice` switches between them. Practice NEVER touches the player: no `position`, no `requestAnimationFrame` loop, no time factor sent to the service. The score stands still and the cursor is a step index, which is why the temporal alignment of the normal mode is not needed here at all
+- `isPractice` switches between them. Practice NEVER touches the player: no `position`, no `requestAnimationFrame` loop, no time factor sent to the service. The score stands still and the cursor marks one step of the exercise (positioned by that step's `attack`, not by its index), which is why the temporal alignment of the normal mode is not needed here at all
 - The two panels are mutually exclusive. The verdict panel is hidden during practice and the practice panel is hidden outside it: they judge the same performance in two different ways, and showing them together would suggest the end-of-piece verdict also applies to the step mode
 - `stepStartRef` marks where the current step begins inside `midi.recording`. The recording is NOT cleared between steps, so without that boundary the twentieth step would carry the notes of the previous nineteen and `pitch-agreement` would judge them against the wrong step, producing invented violations
 - The step boundary moves in an effect keyed on `practice.index`, not right after `submit`, because the hook decides the advance and reading its result immediately would give the stale value
@@ -40,19 +40,20 @@ Top-level page components — one per application route. Each page composes hook
 - It counts POSITIONS, and does not compare pitches. This is the second version of this function, and the change is forced by a measurement, not by taste.
 - The first version searched for the voice whose notes matched the step's. In a real browser it NEVER matched. OSMD reports every note 36 semitones (three octaves) below the plan, uniformly across the piece, because the score carries an `<octave-shift type="down" size="8">` on the violin staff. Step 0 asks for `[46, 93]` and the matching voice says `[10, 57]`; step 1 asks for `[46, 86]` and the voice says `[10, 50]`
 - Writing a `-36` in the code would be a bug dressed as a constant: it would change with the first score that lacks that sign. The height of a note is not a reliable link between the two sides
-- What DOES hold is the POSITION, and it was measured on the whole piece: the iterator's stop `k` is the plan's step `k` — 128 of 128, with the measure matching 128 of 128. Both sides list the attacks in chronological order, so counting is enough and no pitch is read
+- What DOES hold is the POSITION, and it was measured on the whole piece: with no hand chosen, the iterator's stop `k` is the plan's step `k` — 128 of 128, with the measure matching 128 of 128. Both sides list the attacks in chronological order, so counting is enough and no pitch is read
+- With a hand chosen, the position to reach is `steps[i].attack`, not `i`. The cursor walks **every** attack of the score; an exercise for one hand skips some. The service already sends `attack` inside each step, and passing `index` instead fails *silently*: the mark lands on a neighbouring note, and the student plays what they see
 - The iterator makes 256 stops for 128 steps because the score has a repeat: the second pass is byte-for-byte the first. Practice stops at step 127, i.e. at the end of the first pass, and the count therefore stops at `stepIndex` instead of trying to reach the end of the score
 - `cursorStepRef` holds where the cursor stopped, so each step walks forward instead of restarting. It resets only when moving backwards or when its position is unknown (`-1`)
 - Bound: 6000 steps — not a musical limit, the point where giving up beats freezing the page
 - Leaving practice hides the cursor; the normal mode's `followCursor` takes over again
 
-### The practice panel sits ABOVE the score
+### The practice strip sits above the playback pill
 
-- The panel is rendered BEFORE `.score-container`, not after it. Measured in a browser: as a trailing element it landed 2163 px down the document — two and a half screens below the fold. The student looks at the score to follow the cursor and cannot see which key to press without scrolling, which is the one thing the panel exists to say
-- It is `position: sticky; top: 0`, so it stays anchored while the score scrolls. It is opaque on purpose: the score passes under it
-- The panel is TWO columns: the left holds the keys and the step number (what you need to play right now), the right holds the verdicts and the suspended rules (what you read afterwards). One column made the panel 553 px tall — it covered half the score while the left column stayed empty for two thirds of its height
-- The suspended rules live in a closed `<details>`. Their text explains WHY they do not apply, and that is read once, not every step. Closed, the panel is 207 px tall
-- The panel must never be the thing that hides the score: the cursor and the keys are the two things on screen at the same time, and the whole exercise is their relation
+- `PracticeBar` is one fixed row, 2.4 rem tall, sitting directly above the pill (`bottom: calc(1.5rem + 5rem + 0.6rem)`) and sharing its width, radius and glass. It is the whole practice UI: step counter, key counter, one verdict word, hand chips, dynamics chip
+- The box it replaced was `position: sticky; top: 0` over the score, 207 px closed and 471 px open, two columns of keys and verdicts. It hid the first systems — which is where the cursor is — and an explicit request asked for the minimum instead: cursor, one counter, one word
+- It still renders *before* `.score-container` in the DOM. As a trailing element it used to land 2163 px down the document, two and a half screens below the fold
+- The waiting and error states reuse the same row (`.practice-bar.practice-notice`, styles here in `ScorePage.css`) so nothing jumps when the plan turns out to be ready or a hand change is being re-planned
+- The strip must never grow again: the cursor and the counter are the two things looked at together, and the whole exercise is the relation between them
 
 ## Work Guidance
 
@@ -67,8 +68,9 @@ Top-level page components — one per application route. Each page composes hook
 - `npm run lint` — ESLint
 - `npm run build` — TypeScript type-check + Vite build
 - Manual: upload a `.musicxml` file, verify rendering, then press "Play along" and check that the countdown runs, the score plays, and the verdict arrives without pressing anything
-- Manual (practice): press "Practice", check the plan loads, then play a step. The cursor must advance only when every note of the step has been pressed, an extra note must NOT block it, the key colours must be immediate while the verdicts arrive a couple of seconds later, and the three suspended rules must be listed with their reason
-- `node ../alignment/_probe_browser.mjs` — 28 checks in a real browser (Chromium via CDP): the score renders, the practice panel appears with the three suspended rules, the keys and the step number are visible WITHOUT scrolling, the dynamics toggle switches the caption and filters only its own row, playing the right notes advances the cursor and the OSMD cursor element really moves, a wrong note does not advance, the verdicts arrive as "conforme", and the cursor hides on exit. It needs the dev server on port 5173 and the service on 8080, and it fakes `navigator.requestMIDIAccess` so no keyboard is required
+- Manual (practice): press "Practice", check the plan loads, then play a step. The step counter must advance only when every key of the step has been pressed, an extra note must NOT block it, the key counter must react immediately while the verdict word arrives a couple of seconds later, and the tooltip of the step counter must carry the three suspended rules with their reason
+- Manual (hands): press **Dx**, then **Sx**, then **Tutte**. The number of steps must change, the cursor must land on the notes of the chosen staff, a key of the other staff pressed at the same instant must be declared as ignored without blocking or judging, and **Tutte** must restore the whole exercise. On a file that declares no staves the three chips are disabled and their tooltip says why
+- `node ../alignment/_probe_browser.mjs` — about 40 checks in a real browser (Chromium via CDP): the score renders; the strip appears with the step counter and the key counter and **no panel above the score**; it stays one row under 70 px and above the pill, clear of the first systems; the suspended rules are declared in the counter's title; the dynamics chip changes without costing a request; the right notes advance the counter and the OSMD cursor element really moves; **Dx** asks one key where the full plan asked two; **Sx** has fewer steps, declares the other-staff key as ignored without judging it, and its step requests carry `"hand":"left"`; a wrong note does not advance; the verdict word is "conforme" and never `pb-broken`; on exit the strip and the cursor are gone. It needs the dev server on port 5173 and the service on 8080, and it fakes `navigator.requestMIDIAccess` so no keyboard is required
 
 ## Child DOX Index
 

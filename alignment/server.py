@@ -43,7 +43,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 
 from join import ScoreModel, join, to_jsonl
-from practice import PRACTICE_RULES, SUSPENDED_RULES, PracticePlan, step_status, trace_for_step
+from practice import (PRACTICE_RULES, SUSPENDED_RULES, PracticePlan, hand_summary,
+                      step_status, trace_for_step)
 
 MONITOR = os.environ.get("RML_MONITOR", "/opt/rml")
 SPECS = os.environ.get("RML_SPECS", "/opt/specs")
@@ -136,13 +137,34 @@ PLANS_LOCK = threading.Lock()
 MAX_PLANS = 8
 
 
-def _plan_key(score_xml):
-    return hashlib.sha256(score_xml.encode("utf-8")).hexdigest()
+def _plan_key(score_xml, hand):
+    """La cache e' per (spartito, mano): lo stesso brano ha piani diversi."""
+    return hashlib.sha256(("%s|%s" % (hand or "both", score_xml))
+                          .encode("utf-8")).hexdigest()
 
 
-def get_plan(score_xml):
-    """Il piano di pratica per questo spartito, dalla cache o costruendolo."""
-    key = _plan_key(score_xml)
+def _requested_hand(body):
+    """La mano chiesta dalla richiesta: 'right', 'left', o None per tutte.
+
+    Un valore sconosciuto e' un 400 chiaro, non "tutte le mani" per comodita'. Se
+    il frontend scrivesse `destra` e il servizio intendesse "entrambe", l'allievo
+    studierebbe tutto il brano credendo di studiare una mano sola: un errore che si
+    vede solo dopo, quando il tempo e' gia' andato.
+    """
+    hand = body.get("hand")
+    if hand is None:
+        return None
+    hand = str(hand).strip().lower()
+    if hand in ("", "both", "all", "tutte"):
+        return None
+    if hand not in ("right", "left"):
+        raise ValueError("mano sconosciuta: %s (valide: right, left)" % hand)
+    return hand
+
+
+def get_plan(score_xml, hand=None):
+    """Il piano per questo spartito e questa mano, dalla cache o costruendolo."""
+    key = _plan_key(score_xml, hand)
     with PLANS_LOCK:
         cached = PLANS.get(key)
         if cached is not None:
@@ -155,7 +177,7 @@ def get_plan(score_xml):
     # tenerlo bloccato mentre lo si fa serializzerebbe ogni sessione nuova su
     # ogni altra. Due richieste simultanee sullo stesso spartito lo leggono due
     # volte e scrivono lo stesso risultato: e' lavoro sprecato, non un errore.
-    plan = _build_plan(score_xml)
+    plan = _build_plan(score_xml, hand)
 
     with PLANS_LOCK:
         PLANS[key] = plan
@@ -164,8 +186,8 @@ def get_plan(score_xml):
     return plan
 
 
-def _build_plan(score_xml):
-    """Legge lo spartito e ne fa la sequenza di passi."""
+def _build_plan(score_xml, hand=None):
+    """Legge lo spartito e ne fa la sequenza di passi per la mano richiesta."""
     score = scratch_path(".musicxml")
     try:
         with open(score, "w", encoding="utf-8") as f:
@@ -173,7 +195,7 @@ def _build_plan(score_xml):
         model = ScoreModel.from_musicxml(score)
     finally:
         unlink(score)
-    return PracticePlan(model)
+    return PracticePlan(model, hand)
 
 
 def _run_metrics(trace_path, metrics):
@@ -291,11 +313,16 @@ def practise_step(body):
     if not isinstance(events, list):
         raise ValueError("manca l'elenco degli eventi")
 
-    plan = get_plan(body["score"])
+    hand = _requested_hand(body)
+    plan = get_plan(body["score"], hand)
     index = int(body.get("step", 0))
     if not 0 <= index < len(plan):
-        raise ValueError("passo %d fuori dal brano (0-%d)"
-                         % (index, len(plan) - 1))
+        # Il numero di passi dipende dalla mano richiesta, e il messaggio lo dice:
+        # "fuori dal brano" avrebbe fatto cercare il problema nello spartito invece
+        # che nel filtro mano appena acceso.
+        raise ValueError("passo %d fuori dall'esercizio (%d-%d%s)"
+                         % (index, 0, len(plan) - 1,
+                            ", mano " + hand if hand else ""))
 
     # Gli eventi arrivano grezzi dal canale MIDI e vanno normalizzati come nella
     # modalita' normale: un campo malformato deve dare un 400 chiaro, non una
@@ -340,6 +367,9 @@ def practise_step(body):
     return {
         "step": index,
         "total": len(plan),
+        # quale sottoinsieme si sta studiando: serve al frontend per non mostrare
+        # un verdetto della mano destra come se fosse del brano intero
+        "hand": hand,
         "status": status,
         "verdicts": {k: {"ok": v[0], "exit": v[1]} for k, v in verdicts.items()},
         "suspended": SUSPENDED_RULES,
@@ -381,6 +411,10 @@ class Handler(BaseHTTPRequestHandler):
             "practice": {
                 "rules": list(PRACTICE_RULES),
                 "suspended": SUSPENDED_RULES,
+                # Le mani che il filtro sa isolare. Viaggia qui perche' e' la prima
+                # cosa da guardare quando il toggle dell'app resta spento sul sito
+                # deployato: se questo elenco c'e', il servizio e' quello giusto.
+                "hands": ["right", "left"],
             },
         })
 
@@ -395,9 +429,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/practice":
                 if not isinstance(body.get("score"), str) or "<" not in body["score"]:
                     raise ValueError("manca lo spartito MusicXML")
-                plan = get_plan(body["score"])
+                hand = _requested_hand(body)
+                plan = get_plan(body["score"], hand)
                 return self._send(200, {
                     "total": len(plan),
+                    "hand": hand,
+                    # Che cosa separa davvero questo spartito: se `split` e' falso
+                    # il frontend tiene il filtro mano spento e dichiarato, perche'
+                    # un toggle che chiede "destra" a un pezzo senza righi sceglie
+                    # meta' brano a caso.
+                    "hands": hand_summary(plan.model),
                     "steps": plan.all_events(),
                     "rules": list(PRACTICE_RULES),
                     "suspended": SUSPENDED_RULES,

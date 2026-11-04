@@ -90,8 +90,11 @@ try:
           len(info.get("practice", {}).get("rules", [])) == 4)
     check("il GET dichiara le 3 sospese",
           len(info.get("practice", {}).get("suspended", {})) == 3)
+    check("il GET dichiara le mani che il filtro sa isolare",
+          info.get("practice", {}).get("hands") == ["right", "left"])
 
     print("\n=== POST /practice (il piano) ===")
+    pieno = None
     data, ms, err = post("/practice", {"score": score_xml})
     if err:
         print("  ERRORE: %s" % err)
@@ -107,6 +110,7 @@ try:
         check("il piano dichiara le regole attive", len(data["rules"]) == 4)
         check("il piano dichiara le regole sospese", len(data["suspended"]) == 3)
         primo_passo = data["steps"][0]
+        pieno = data            # serve ai controlli sul filtro per mano, piu' sotto
 
     # secondo giro: deve venire dalla cache, quindi molto piu' veloce
     _, ms2, _ = post("/practice", {"score": score_xml})
@@ -192,6 +196,86 @@ try:
         check("senza note non si dichiara nessun verdetto",
               len(vuoto["verdicts"]) == 0)
         check("senza note il cursore resta", vuoto["status"]["advance"] is False)
+
+    # ---- il filtro per mano, via HTTP
+    #
+    # Sono tre le cose da verificare qui e non solo nel modulo: che il servizio
+    # dichiari quante mani ha lo spartito (il frontend ci spegne il toggle se
+    # false), che l'indice assoluto dell'attacco arrivi giusto (e' quello che il
+    # cursore di OSMD deve contare), e che un passo valido per il brano completo
+    # diventi rifiutato dentro l'esercizio di una mano sola.
+    print("\n=== POST /practice : mano sinistra sola ===")
+    sx, ms, err = post("/practice", {"score": score_xml, "hand": "left"})
+    if err or not pieno:
+        print("  ERRORE: %s" % (err or "piano completo non disponibile"))
+        check("il piano per mano risponde", False)
+    else:
+        mani = sx.get("hands", {})
+        print("  mani nel file: %s" % mani)
+        print("  passi sinistra: %d, brano completo: %d (%.0f ms)"
+              % (sx["total"], pieno["total"], ms))
+        check("il piano dichiara le due mani dello spartito",
+              mani.get("split") is True and mani.get("right", 0) > 0
+              and mani.get("left", 0) > 0)
+        check("la mano sinistra ha meno passi del brano completo",
+              0 < sx["total"] < pieno["total"])
+        indici = [s.get("attack") for s in sx["steps"]]
+        check("ogni passo per mano porta l'indice assoluto dell'attacco",
+              all(isinstance(a, int) for a in indici))
+        check("gli indici sono crescenti e senza buchi nell'ordine",
+              indici == sorted(indici) and len(set(indici)) == len(indici))
+        check("i passi della sinistra stanno dentro gli attacchi del brano",
+              all(a < pieno["total"] and set(s["pitch"]) <= set(pieno["steps"][a]["pitch"])
+                  for s, a in zip(sx["steps"], indici)))
+
+        print("\n=== POST /practice/step : mano sinistra, nota della destra ===")
+        primo_sx = sx["steps"][0]
+        ev = []
+        t = 1000
+        for p in primo_sx["pitch"]:
+            ev.append({"type": "noteon", "pitch": p, "velocity": 80, "time_ms": t})
+            ev.append({"type": "noteoff", "pitch": p, "velocity": 0, "time_ms": t + 200})
+            t += 15
+        altre = primo_sx.get("offhand") or []
+        if altre:
+            # la premo DOPO, perche' se fosse giudicata sarebbe una nota fuori
+            # posto: deve essere ignorata, non perdonata
+            ev.append({"type": "noteon", "pitch": altre[0], "velocity": 80,
+                       "time_ms": t + 400})
+            ev.append({"type": "noteoff", "pitch": altre[0], "velocity": 0,
+                       "time_ms": t + 600})
+        sxstep, ms, err = post("/practice/step",
+                               {"score": score_xml, "hand": "left",
+                                "step": 0, "events": ev})
+        if err:
+            print("  ERRORE: %s" % err)
+            check("il passo per mano risponde", False)
+        else:
+            print("  attese %s | premute %s | altra mano %s | estranee %s"
+                  % (sxstep["status"]["expected"], sxstep["status"]["pressed"],
+                     sxstep["status"]["other_hand"], sxstep["status"]["extra"]))
+            check("il passo per mano dice quale mano si sta studiando",
+                  sxstep.get("hand") == "left")
+            check("la nota dell'altra mano e' dichiarata, non giudicata",
+                  not sxstep["status"]["extra"]
+                  and (not altre or sxstep["status"]["other_hand"] == [altre[0]]))
+            check("con la mano sola il passo completo avanza",
+                  sxstep["status"]["advance"] is True)
+            check("nessuna regola e' in errore sul passo per mano (exit 2)",
+                  all(v["exit"] != 2 for v in sxstep["verdicts"].values()))
+
+        print("\n=== POST /practice/step : fuori dall'esercizio della mano ===")
+        _, _, err = post("/practice/step",
+                         {"score": score_xml, "hand": "left",
+                          "step": sx["total"], "events": []})
+        print("  risposta: %s" % (err or "(nessun errore!)").strip()[:140])
+        check("un passo oltre i passi della mano e' rifiutato", err is not None)
+
+    _, _, err = post("/practice/step",
+                     {"score": score_xml, "hand": "destra", "step": 0, "events": []})
+    print("\n=== POST /practice/step : mano scritta male ===")
+    print("  risposta: %s" % (err or "(nessun errore!)").strip()[:140])
+    check("una mano sconosciuta e' un 400, non 'tutte le mani'", err is not None)
 
     # ---- la modalita' normale deve continuare a funzionare
     print("\n=== POST / (modalita' normale, non deve essersi rotta) ===")

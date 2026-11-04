@@ -95,7 +95,7 @@ When the user requests a durable behavior change, record it here or in the relev
 
 - `src/` — Application source root: React entry point (`main.tsx`), top-level router (`App.tsx`), global stylesheets, and three durable subdomains:
   - `src/pages/` — Route-level page components (HomePage, UploadPage, ScorePage)
-  - `src/components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticePanel)
+  - `src/components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticeBar)
   - `src/hooks/` — Domain-logic hooks (useMidi, useVerdict) and the pure exercise-rules module (practiceSteps) with its session hook (usePractice)
 
 ## Service contract
@@ -103,7 +103,10 @@ When the user requests a durable behavior change, record it here or in the relev
 The backend lives in `../alignment/` and `../service/`, not here, but the web app depends on its three endpoints. They are contract, not implementation detail:
 
 - `POST /` — normal mode. `{score, notes, control_changes, tempo_factor}` → the seven RML verdicts for the whole piece
-- `POST /practice` — the practice plan: `{score}` → every step with the pitches it asks for, plus the active and the suspended rules
-- `POST /practice/step` — one step: `{score, step, events, control_changes}` → the verdicts of the practice rules for that step, the completeness status, and the suspended rules
+- `POST /practice` — the practice plan: `{score, hand}` → every step with the pitches it asks for, plus `attack` (the index of that attack in the **full** score, which is what the OSMD cursor walks), `offhand` (the pitches of the other staff at the same instant), the active rules, the suspended rules, and `hands` — what this file allows to separate (`{right, left, unknown, split}`)
+- `POST /practice/step` — one step: `{score, step, hand, events, control_changes}` → the verdicts of the practice rules for that step, the completeness status (with `other_hand`: presses belonging to the excluded staff, declared and not counted as wrong), and the suspended rules
+- `hand` is `null`/`"both"` = the whole piece, `"right"` = upper staff, `"left"` = lower staff. It changes the **exercise**, not the view: a different number of steps, different pitches, a different cursor target. An unrecognised hand is a 400, never a silent fall back to "both"
+- The hand split comes from a voice → dominant-`<staff>` map, so cross-staff notes keep the hand that plays them; notes with no recognisable staff stay in the exercise even when one hand is chosen, because dropping them would make a step impossible to complete
+- With one hand chosen, the other hand's attacks are **removed from the RML trace and from `chordMates`**, not merely forgiven: `chord-jitter` matches by chord membership, so an attack of the excluded hand at the same instant would mask real jitter. They still reach the UI as `other_hand` — absent is not zero
 
-`exit` in a verdict is three-valued, and the app must not collapse it: `0` conforms, `1` is violated, `2` is **the monitor did not start** (missing `swipl`, a spec that does not compile). Rendering `2` as "violata" tells the student they played badly when the service is broken. `PracticePanel` shows it as its own state.
+`exit` in a verdict is three-valued, and the app must not collapse it: `0` conforms, `1` is violated, `2` is **the monitor did not start** (missing `swipl`, a spec that does not compile). Rendering `2` as "violata" tells the student they played badly when the service is broken. The compact verdict line has its own tone for it (`pb-broken`) and ranks it above every playing problem — see `stepProblem` in `src/hooks/practiceSteps.ts`.
