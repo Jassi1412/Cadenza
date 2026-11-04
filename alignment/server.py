@@ -158,7 +158,7 @@ def _requested_hand(body):
     if hand in ("", "both", "all", "tutte"):
         return None
     if hand not in ("right", "left"):
-        raise ValueError("mano sconosciuta: %s (valide: right, left)" % hand)
+        raise ValueError("unknown hand: %s (valid values: right, left)" % hand)
     return hand
 
 
@@ -257,26 +257,26 @@ def validate(body):
     """Controllo di ingresso. Questa e' una frontiera fidata: il corpo arriva
     da un browser, non da noi."""
     if not isinstance(body.get("score"), str) or "<" not in body.get("score", ""):
-        raise ValueError("manca lo spartito MusicXML")
+        raise ValueError("missing MusicXML score")
     notes = body.get("notes")
     if not isinstance(notes, list) or not notes:
-        raise ValueError("nessuna nota suonata")
+        raise ValueError("no notes were played")
     out = []
     for n in notes:
         if not isinstance(n, dict):
-            raise ValueError("nota malformata")
+            raise ValueError("malformed note")
         try:
             out.append({"time_ms": float(n["time_ms"]), "dur_ms": float(n["dur_ms"]),
                         "pitch": int(n["pitch"]), "velocity": int(n["velocity"])})
         except (KeyError, TypeError, ValueError):
-            raise ValueError("nota malformata: servono time_ms, dur_ms, pitch, velocity")
+            raise ValueError("malformed note: time_ms, dur_ms, pitch and velocity are required")
     cc = []
     for c in body.get("control_changes") or []:
         try:
             cc.append({"time_ms": float(c["time_ms"]),
                        "controller": int(c["controller"]), "value": int(c["value"])})
         except (KeyError, TypeError, ValueError):
-            raise ValueError("control change malformato")
+            raise ValueError("malformed control change")
     return out, cc
 
 
@@ -307,11 +307,11 @@ def practise_step(body):
     "come l'hai suonato", non a "puoi andare avanti".
     """
     if not isinstance(body.get("score"), str) or "<" not in body["score"]:
-        raise ValueError("manca lo spartito MusicXML")
+        raise ValueError("missing MusicXML score")
 
     events = body.get("events")
     if not isinstance(events, list):
-        raise ValueError("manca l'elenco degli eventi")
+        raise ValueError("missing the list of events")
 
     hand = _requested_hand(body)
     plan = get_plan(body["score"], hand)
@@ -320,9 +320,9 @@ def practise_step(body):
         # Il numero di passi dipende dalla mano richiesta, e il messaggio lo dice:
         # "fuori dal brano" avrebbe fatto cercare il problema nello spartito invece
         # che nel filtro mano appena acceso.
-        raise ValueError("passo %d fuori dall'esercizio (%d-%d%s)"
+        raise ValueError("step %d is outside this exercise (%d-%d%s)"
                          % (index, 0, len(plan) - 1,
-                            ", mano " + hand if hand else ""))
+                            ", hand " + hand if hand else ""))
 
     # Gli eventi arrivano grezzi dal canale MIDI e vanno normalizzati come nella
     # modalita' normale: un campo malformato deve dare un 400 chiaro, non una
@@ -330,13 +330,13 @@ def practise_step(body):
     clean = []
     for e in events:
         if not isinstance(e, dict):
-            raise ValueError("evento malformato")
+            raise ValueError("malformed event")
         try:
             clean.append({"type": str(e["type"]), "pitch": int(e["pitch"]),
                           "velocity": int(e.get("velocity") or 0),
                           "time_ms": float(e["time_ms"])})
         except (KeyError, TypeError, ValueError):
-            raise ValueError("evento malformato: servono type, pitch, time_ms")
+            raise ValueError("malformed event: type, pitch and time_ms are required")
     clean.sort(key=lambda e: e["time_ms"])
 
     cc = []
@@ -345,7 +345,7 @@ def practise_step(body):
             cc.append({"time_ms": float(c["time_ms"]),
                        "controller": int(c["controller"]), "value": int(c["value"])})
         except (KeyError, TypeError, ValueError):
-            raise ValueError("control change malformato")
+            raise ValueError("malformed control change")
 
     trace = trace_for_step(plan, index, clean, cc)
     status = step_status(plan, index, clean)
@@ -422,13 +422,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n <= 0 or n > MAX_BODY:
-                return self._send(413, {"error": "corpo fuori dai limiti"})
+                return self._send(413, {"error": "request body too large"})
             body = json.loads(self.rfile.read(n))
 
             path = self.path.split("?")[0].rstrip("/") or "/"
             if path == "/practice":
                 if not isinstance(body.get("score"), str) or "<" not in body["score"]:
-                    raise ValueError("manca lo spartito MusicXML")
+                    raise ValueError("missing MusicXML score")
                 hand = _requested_hand(body)
                 plan = get_plan(body["score"], hand)
                 return self._send(200, {

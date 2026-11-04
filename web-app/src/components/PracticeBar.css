@@ -3,8 +3,15 @@
  * Perche' una riga e non un pannello: quello vecchio era alto 207 px chiuso e 471
  * aperto, e copriva meta' partitura. Qui la striscia sta in 2,4 rem e vive accanto
  * alla pillola, cioe' dove l'occhio e' gia' quando guarda i comandi. Le due barre
- * condividono il linguaggio (stesso vetro, stesso raggio, stessa larghezza) per non
- * sembrare due prodotti diversi.
+ * condividono il linguaggio (stesso raggio, stessa larghezza, stesso fondo solido)
+ * per non sembrare due prodotti diversi.
+ *
+ * Il fondo non e' piu' vetro: chi usa l'app ha chiesto superfici chiuse perche' i
+ * comandi si leggessero. Con `rgba(…, 0.85) + blur` le note sotto trapelavano dentro
+ * la pillola, e i pulsanti — che sono la cosa a cui si guarda mentre le dita sono
+ * gia' sui tasti — restavano a meta'. Stesso colore di `--bg-secondary`, che non e'
+ * il colore della pagina: due superfici dello stesso colore sarebbero tenute
+ * separate solo dal bordo.
  */
 .practice-bar {
   position: fixed;
@@ -20,12 +27,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  padding: 0 0.5rem 0 1rem;
+  padding: 0 0.5rem 0 0.5rem;
 
-  background-color: rgba(252, 251, 248, 0.85);
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-  border: 1px solid rgba(197, 168, 128, 0.2);
+  background-color: var(--bg-secondary, #F3F0EA);
+  border: 1px solid rgba(197, 168, 128, 0.35);
   box-shadow:
     0 10px 30px rgba(0, 0, 0, 0.08),
     inset 0 0 0 1px rgba(255, 255, 255, 0.4);
@@ -38,22 +43,44 @@
   animation: bar-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* ── Contatore dei passi ── */
-.pb-step {
+/* ── La colonna di sinistra: il pulsante tastiera e la parola del verdetto ──
+ * Il contatore dei passi e quello dei tasti non ci sono piu': la domanda "quale
+ * tasto?" ha una risposta disegnata, non numerica, e il numero stava nel `title`
+ * del pulsante a forma di pianoforte. */
+.pb-left {
   display: inline-flex;
-  align-items: baseline;
-  gap: 0.05rem;
-  font-weight: 700;
-  font-size: 0.8125rem; /* 13px */
-  color: var(--text-primary, #4a4437);
-  font-variant-numeric: tabular-nums;
-  cursor: help;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
 }
 
-.pb-step-total {
-  font-size: 0.625rem;
-  font-weight: 600;
-  color: #9a9284;
+/* ── Il pulsante che apre la tastiera di richiamo ── */
+.pb-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  padding: 0;
+  border-radius: 9999px;
+  border: 1px solid #d8d2c4;
+  background: #fffdfb;
+  color: #6b6357;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pb-icon:hover {
+  border-color: var(--accent-primary, #C5A880);
+  color: #4a4437;
+}
+
+.pb-icon-on,
+.pb-icon-on:hover {
+  background: #f2e3c9;
+  border-color: var(--accent-primary, #C5A880);
+  color: var(--accent-secondary, #735c00);
 }
 
 /* ── Punteggiatura condivisa: un punto colorato prima del testo ── */
@@ -65,48 +92,24 @@
   flex: none;
 }
 
-/* ── "quanti tasti mancano": segue lo stato LOCALE, non il verdetto ──
- * Il verdetto arriva in un paio di secondi sul servizio deployato; la completezza
- * dei tasti no, e dev'essere immediata mentre il dito e' ancora sul tasto. */
-.pb-keys {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: help;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-
-.pb-keys .pb-dot-keys {
-  background: #cfc7b8;
-}
-
-.pb-keys-ok,
-.pb-keys-ok .pb-dot-keys {
-  color: #2f6b47;
-}
-
-.pb-keys-ok .pb-dot-keys {
-  background: #3d8a5c;
-}
-
-/* I tasti dell'altro rigo premuti comunque: si dichiarano, non si conteggiano. */
-.pb-other {
-  color: #9a9284;
-  font-size: 0.625rem;
-}
-
 /* ── Il verdetto compatto: una parola ──
  * I tre colori sono gli stessi del pannello che questa riga sostituisce: verde
- * conforme, rosso "hai suonato", viola "non e' colpa tua" (exit 2 = il monitor non
- * e' partito). Il viola non deve mai diventare rosso: sarebbe l'errore del servizio
- * letto come un giudizio su chi suona. */
+ * "correct", rosso "what you played", viola "not your fault" (exit 2 = il monitor
+ * non e' partito). Il viola non deve mai diventare rosso: sarebbe l'errore del
+ * servizio letto come un giudizio su chi suona. */
 .pb-problem {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Verdetto di un passo gia' lasciato: si vede dall'aspetto, non da una scritta.
+   Una "· passo 12" in piu' era un numero tornato dalla finestra appena chiusa. */
+.pb-stale {
+  opacity: 0.45;
 }
 
 .pb-waiting .pb-dot,
@@ -117,6 +120,24 @@
 .pb-waiting,
 .pb-checking {
   color: #9a9284;
+}
+
+/* Nessuna scritta d'attesa: la richiesta in volo si dice da sola, col punto che
+   respira. E' l'unico stato senza parole, e resta distinguibile da "conforme". */
+.pb-checking .pb-dot {
+  background: var(--accent-primary, #C5A880);
+  animation: pb-breath 1.1s ease-in-out infinite;
+}
+
+@keyframes pb-breath {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
 }
 
 .pb-ok .pb-dot {
@@ -146,12 +167,7 @@
   font-weight: 700;
 }
 
-.pb-checking {
-  color: #9a9284;
-  font-weight: 400;
-}
-
-/* ── I comandi extra, a destra ── */
+/* ── I comandi, a destra: L, R e D ── */
 .pb-controls {
   display: inline-flex;
   align-items: center;
@@ -159,8 +175,8 @@
   flex: none;
 }
 
-/* Un solo contorno per i tre segmenti della mano: si capisce che si escludono a
-   vicenda senza doverlo spiegare a parole. */
+/* Un solo contorno per i segmenti della mano: si capisce che sono lo stesso comando
+   senza doverlo spiegare a parole. */
 .pb-seg {
   display: inline-flex;
   border: 1px solid #d8d2c4;
@@ -175,44 +191,45 @@
 
 .pb-chip {
   font-family: inherit;
-  font-size: 0.5625rem; /* 9px, come le etichette della pillola */
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-size: 0.625rem; /* 10px: sono lettere singole, non etichette di modo */
+  font-weight: 800;
+  letter-spacing: 0.04em;
   color: #6b6357;
-  background: none;
+  background: #fffdfb;
   border: 1px solid #d8d2c4;
   border-radius: 9999px;
-  padding: 0.3rem 0.5rem;
+  padding: 0.3rem 0.45rem;
+  min-width: 1.5rem;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .pb-chip:hover:not(:disabled) {
-  background: #f2efe6;
+  border-color: var(--accent-primary, #C5A880);
+  color: #4a4437;
 }
 
 .pb-chip-on,
 .pb-chip-on:hover:not(:disabled) {
-  background: #e6dedc;
-  border-color: #c5a880;
-  color: #735c00;
+  background: #f2e3c9;
+  border-color: var(--accent-primary, #C5A880);
+  color: var(--accent-secondary, #735c00);
 }
 
-/* Spento perche' il file non separa le mani: non e' un pulsante che non funziona,
-   e' un pulsante che non ha niente da fare, e la differenza la spiega il title. */
-.pb-chip:disabled {
-  opacity: 0.35;
+/* Spento perche' non c'e' niente da fare, non perche' il file non separa le mani:
+   qui il pulsante e' uno solo e spento non puo' andare. Si vede che non si tocca,
+   e il titolo dice il perche'. */
+.pb-chip:disabled,
+.pb-chip-stuck {
   cursor: not-allowed;
+}
+
+.pb-chip:disabled {
+  opacity: 0.55;
 }
 
 @media (max-width: 30rem) {
   .practice-bar {
     gap: 0.4rem;
-    padding-left: 0.6rem;
-  }
-
-  .pb-other {
-    display: none;
   }
 }

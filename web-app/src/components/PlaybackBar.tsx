@@ -89,7 +89,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isPlaying ? 'active' : ''}`}
         onClick={onPlayPause}
         disabled={isLoading || isTakeActive || isPractice}
-        title={isPlaying ? 'Pause' : 'Playback — ascolta e basta'}
+        title={isPlaying ? 'Pause' : 'Playback — listening only'}
         id="bar-play-btn"
       >
         <span
@@ -127,7 +127,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isTakeActive ? 'practice-active' : ''}`}
         onClick={onPlayAlong}
         disabled={isLoading || isTakeActive || isPractice}
-        title={isTakeActive ? 'Prova in corso' : 'Suona insieme allo spartito'}
+        title={isTakeActive ? 'Recording in progress' : 'Play along with the score'}
         id="bar-practice-btn"
       >
         <PlayAlongIcon />
@@ -141,7 +141,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isPractice ? 'practice-active' : ''}`}
         onClick={isPractice ? onPracticeStop : onPractice}
         disabled={isLoading || isTakeActive}
-        title={isPractice ? 'Esci dalla pratica' : 'Brano fermo, un passo per volta'}
+        title={isPractice ? 'Exit practice' : 'The piece stands still, one step at a time'}
         id="bar-step-btn"
       >
         <span
@@ -170,15 +170,15 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
             value={bpm}
             disabled={isLoading}
             onChange={(e) => onBpmChange(Number(e.target.value))}
-            aria-label="Tempo in battute al minuto"
-            aria-valuetext={`${bpm} battute al minuto`}
+            aria-label="Tempo in beats per minute"
+            aria-valuetext={`${bpm} beats per minute`}
             id="bar-bpm-slider"
           />
           <span className="bar-tempo-value">
             {bpm}
             <span className="bar-tempo-unit">BPM</span>
           </span>
-          {slowed && <span className="bar-tempo-note">da {scoreBpm}</span>}
+          {slowed && <span className="bar-tempo-note">from {scoreBpm}</span>}
         </div>
       )}
     </div>

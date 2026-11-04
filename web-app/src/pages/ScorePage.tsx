@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
@@ -7,6 +7,7 @@ import { usePractice } from '../hooks/usePractice';
 import { pressedPitches, stepProblem } from '../hooks/practiceSteps';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
+import PianoKeyboard from '../components/PianoKeyboard';
 import './ScorePage.css';
 
 // Module-level refs for dynamic imports
@@ -209,6 +210,17 @@ const ScorePage: React.FC = () => {
    */
   const [preparing, setPreparing] = useState<'midi' | 'piano' | null>(null);
 
+  /**
+   * La tastiera di richiamo, aperta o chiusa dal pulsante a forma di pianoforte.
+   *
+   * Parte APERTA: da quando la riga non porta piu' "1/128" e "0/2 tasti", la
+   * tastiera accesa e' l'equivalente visivo di quel contatore, e chi entra in
+   * pratica deve trovare il tasto subito, non dopo un clic su un'icona. Si puo'
+   * chiudere in qualunque momento con lo stesso pulsante, e la scelta non tocca
+   * niente dell'esercizio: e' solo vista.
+   */
+  const [keyboardOpen, setKeyboardOpen] = useState(true);
+
   // Dove comincia, dentro `midi.recording`, la roba del passo corrente.
   //
   // `recording` e' la registrazione intera e non si azzera fra un passo e
@@ -235,6 +247,7 @@ const ScorePage: React.FC = () => {
     setProgress(0);
     setPhase('idle');
     setIsPractice(true);
+    setKeyboardOpen(true);
     midi.clearRecording();
     stepStartRef.current = 0;
     lastLenRef.current = 0;
@@ -269,6 +282,7 @@ const ScorePage: React.FC = () => {
 
   const stopPractice = useCallback(() => {
     setIsPractice(false);
+    setKeyboardOpen(false);
     // Anche l'attesa va interrotta: senza questo, uscire mentre il browser
     // chiede il permesso lascerebbe a schermo il pannello "concedi il
     // permesso", con la pratica gia' chiusa.
@@ -656,6 +670,36 @@ const ScorePage: React.FC = () => {
     dynamicsOn: practice.dynamicsOn,
   });
 
+  /**
+   * L'estensione su cui disegnare la tastiera di richiamo.
+   *
+   * Non e' una tastiera fissa da 88 tasti: su uno schermo da tredici pollici
+   * ottantotto tasti vogliono dire sei pixel l'uno, e un disegno dove non si
+   * distingue un tasto bianco da uno nero non risponde piu' alla domanda "quale
+   * tasto?". L'estensione la prende dai passi che il servizio ha dichiarati — li'
+   * ci sono i pitch che il brano chiede davvero, comprese le note dell'altro rigo
+   * che restano nel disegno come contesto viola — e la chiude sui do perche' e' li'
+   * che si leggono le etichette dei punti di riferimento.
+   */
+  const tastiera = useMemo(() => {
+    const pitches = practice.steps.flatMap((s) => [...s.pitch, ...(s.offhand ?? [])]);
+    if (pitches.length === 0) return { low: 48, high: 84 };
+    const min = Math.max(...pitches);
+    const max = Math.min(...pitches);
+    let low = Math.max(21, Math.floor(Math.min(...pitches) / 12) * 12);
+    let high = Math.min(108, Math.ceil(max / 12) * 12);
+    // Oltre cinque ottave i tasti diventano strisce: se il brano e' piu' largo, la
+    // finestra si centra sull'estensione invece di allungarsi ancora.
+    if (high - low > 60) {
+      const centro = Math.round((min + max) / 24) * 12;
+      low = Math.max(21, centro - 30);
+      high = Math.min(108, low + 60);
+    }
+    return { low, high };
+  }, [practice.steps]);
+
+  const passoCorrente = practice.steps[practice.index];
+
   if (error) {
     return (
       <div className="score-page container">
@@ -681,10 +725,25 @@ const ScorePage: React.FC = () => {
         {(phase === 'countdown' || phase === 'playing') && (
           <div className="practice-status">
             <span className="practice-status-dot" />
-            {phase === 'countdown' ? 'Pronti…' : 'Prova in corso'}
+            {phase === 'countdown' ? 'Ready…' : 'Take in progress'}
           </div>
         )}
       </div>
+
+      {/* La tastiera di richiamo, sopra la striscia dei comandi. C'e' solo quando
+          l'esercizio e' pronto: durante l'attesa del permesso MIDI o del piano non
+          c'e' nessun passo da accendere, e una tastiera con i tasti tutti spenti
+          sarebbe un disegno che mente. */}
+      {isPractice && keyboardOpen && passoCorrente && (
+        <PianoKeyboard
+          low={tastiera.low}
+          high={tastiera.high}
+          expected={passoCorrente.pitch}
+          pressed={practice.status?.pressed ?? []}
+          extra={practice.status?.extra ?? []}
+          offhand={passoCorrente.offhand ?? []}
+        />
+      )}
 
       {/* Gli stati della pratica: la barra dei comandi quando si suona, una riga
           di avviso mentre si aspetta o quando qualcosa e' andato storto. Sta al
@@ -698,25 +757,25 @@ const ScorePage: React.FC = () => {
              vede, ed e' gia' il motivo per cui non succede nient'altro. */
           <section className="practice-bar practice-notice">
             <p>
-              Concedi il permesso alla tastiera MIDI per suonare i passi. La
-              domanda del browser potrebbe essere gia' aperta dietro questa finestra.
+              Allow the MIDI keyboard so the steps can be played. The browser&apos;s
+              prompt may already be open behind this window.
             </p>
             <button className="pb-chip" onClick={stopPractice}>Exit</button>
           </section>
         ) : preparing === 'piano' ? (
           <section className="practice-bar practice-notice">
-            <p>Sto leggendo lo spartito e preparando i passi…</p>
+            <p>Reading the score and preparing the steps…</p>
           </section>
         ) : practice.phase === 'error' ? (
           <section className="practice-bar practice-notice practice-notice-bad">
             <p>
-              {practice.error ?? 'Non sono riuscito a preparare i passi di questo spartito.'}
+              {practice.error ?? 'Could not prepare the steps for this score.'}
             </p>
             <button className="pb-chip" onClick={stopPractice}>Exit</button>
           </section>
         ) : practice.phase === 'loading' ? (
           <section className="practice-bar practice-notice">
-            <p>Cambio mano e preparo di nuovo i passi…</p>
+            <p>Switching hand and re-preparing the steps…</p>
           </section>
         ) : (
           <PracticeBar
@@ -733,6 +792,8 @@ const ScorePage: React.FC = () => {
             onHandChange={(h) => void practice.setHand(h)}
             dynamicsOn={practice.dynamicsOn}
             onDynamicsChange={practice.setDynamicsOn}
+            keyboardOpen={keyboardOpen}
+            onKeyboardToggle={() => setKeyboardOpen((v) => !v)}
             suspended={practice.suspended}
             /* Un errore di rete non ferma l'esercizio: si segnala qui e si
                continua a suonare. Interrompere un allievo per un problema del
@@ -756,8 +817,8 @@ const ScorePage: React.FC = () => {
             guardando le mani, non la pagina. */}
         {phase === 'countdown' && (
           <div className="countdown-overlay">
-            <div className="countdown-value" key={count}>{count > 0 ? count : 'Via'}</div>
-            <p className="countdown-hint">Preparati, si parte fra poco</p>
+            <div className="countdown-value" key={count}>{count > 0 ? count : 'Go'}</div>
+            <p className="countdown-hint">Get ready, starting shortly</p>
           </div>
         )}
       </div>
@@ -766,30 +827,30 @@ const ScorePage: React.FC = () => {
       {!isPractice && verdict.status !== 'idle' && (
         <section className="verdict-panel" ref={verdictPanelRef}>
           <div className="verdict-panel-head">
-            <h2 className="heading">Il verdetto</h2>
+            <h2 className="heading">Verdicts</h2>
             {verdict.status === 'done' && (
-              <button className="btn btn-outline" onClick={verdict.reset}>Chiudi</button>
+              <button className="btn btn-outline" onClick={verdict.reset}>Close</button>
             )}
           </div>
 
-          {verdict.status === 'working' && <p className="verdict-note">Allineamento e verifica delle sette regole…</p>}
+          {verdict.status === 'working' && <p className="verdict-note">Aligning the performance and checking the seven rules…</p>}
 
           {verdict.status === 'error' && <p className="verdict-note verdict-error">{verdict.error}</p>}
 
           {verdict.status === 'done' && verdict.verdicts && (
             <>
-              <p className="verdict-note">{verdict.noteCount} note analizzate</p>
+              <p className="verdict-note">{verdict.noteCount} notes analysed</p>
               <ul className="verdict-list">
                 {Object.entries(verdict.verdicts).map(([key, v]) => (
                   <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
                     <span className="verdict-mark">{v.ok ? '✓' : '✗'}</span>
                     <span className="verdict-name">{key}</span>
-                    <span className="verdict-detail">{v.ok ? 'conforme' : 'violata'}</span>
+                    <span className="verdict-detail">{v.ok ? 'passed' : 'violated'}</span>
                   </li>
                 ))}
               </ul>
               <button className="btn btn-outline verdict-retry" onClick={() => void handlePlayAlong()}>
-                Suona di nuovo
+                Play again
               </button>
             </>
           )}

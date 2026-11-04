@@ -152,7 +152,7 @@ export type ProblemTone = 'waiting' | 'checking' | 'ok' | 'warn' | 'broken';
 
 export interface StepProblem {
   tone: ProblemTone;
-  /** una riga sola, in italiano: e' un messaggio, non un'etichetta di modo */
+  /** una riga sola, in inglese; vuota vuol dire "niente da dire". E' un messaggio, non un'etichetta di modo */
   text: string;
   /** il verdetto mostrato riguarda un passo gia' lasciato */
   stale: boolean;
@@ -195,10 +195,13 @@ export function stepProblem(input: {
 
   // Niente da dire finche' non c'e' nessun verdetto. Il servizio non ha ancora
   // risposto, e un "ok" messo qui sarebbe inventato: sta succedendo niente.
+  // Le due parole sono state tolte su richiesta precisa di chi usa l'app: la
+  // riga deve portare solo il giudizio, e l'attesa la si vede dal punto che
+  // pulsa (`.pb-checking`), non da una frase.
   if (last === null) {
-    if (judging) return { tone: 'checking', text: 'verifico…', stale: false };
-    if (error) return { tone: 'warn', text: 'il verdetto non e\' arrivato', stale: false };
-    return { tone: 'waiting', text: 'suona i tasti del passo', stale: false };
+    if (judging) return { tone: 'checking', text: '', stale: false };
+    if (error) return { tone: 'warn', text: 'no verdict from the service', stale: false };
+    return { tone: 'waiting', text: '', stale: false };
   }
 
   const stale = last.step !== stepIndex;
@@ -210,8 +213,8 @@ export function stepProblem(input: {
   // `verdicts: {}` quando non e' premuto nessun tasto, apposta per non dire
   // "conforme" sul silenzio. Anche qui il silenzio non diventa un giudizio.
   if (Object.keys(di).length === 0) {
-    if (error) return { tone: 'warn', text: 'il verdetto non e\' arrivato', stale };
-    return { tone: 'waiting', text: 'suona i tasti del passo', stale };
+    if (error) return { tone: 'warn', text: 'no verdict from the service', stale };
+    return { tone: 'waiting', text: '', stale };
   }
 
   // exit 2 per primo, sempre. E' il monitor che non e' partito: dire "nota
@@ -220,13 +223,13 @@ export function stepProblem(input: {
   // separata; qui e' una parola, ma non deve diventare mai un "violata".
   if (rotta('pitch-agreement') || rotta('pitch-range')
       || rotta('chord-jitter') || (dynamicsOn && rotta('dynamics-adherence'))) {
-    return { tone: 'broken', text: 'non verificabile', stale };
+    return { tone: 'broken', text: 'cannot verify', stale };
   }
 
   const viola = (nome: string) => v(nome) !== undefined && !v(nome).ok;
 
   if (viola('pitch-agreement') || viola('pitch-range')) {
-    return { tone: 'warn', text: 'nota sbagliata', stale };
+    return { tone: 'warn', text: 'wrong note', stale };
   }
   if (viola('chord-jitter')) {
     // Le parole che ha usato chi usa l'app: "chord jitter". Il nome della regola e'
@@ -238,9 +241,9 @@ export function stepProblem(input: {
   // sempre girare tutte e quattro le regole): e' l'allievo che ha scelto di non
   // guardarla, quindi non deve comparire nella riga. Lo dice l'interruttore.
   if (dynamicsOn && viola('dynamics-adherence')) {
-    return { tone: 'warn', text: 'dinamica errata', stale };
+    return { tone: 'warn', text: 'bad dynamics', stale };
   }
 
-  if (error) return { tone: 'warn', text: 'il verdetto non e\' arrivato', stale };
-  return { tone: 'ok', text: 'conforme', stale };
+  if (error) return { tone: 'warn', text: 'no verdict from the service', stale };
+  return { tone: 'ok', text: 'correct', stale };
 }

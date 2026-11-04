@@ -113,17 +113,17 @@ PRACTICE_RULES = ("pitch-agreement", "pitch-range",
 # gia' dappertutto (vedi i commenti su dynExplicit e spanExplicit).
 SUSPENDED_RULES = {
     "articulation":
-        "Serve il tempo fra un attacco e il successivo: qui quel tempo e' quanto "
-        "ci metti a trovare il tasto, non un'articolazione.",
+        "It needs the time between one attack and the next. Here that time is "
+        "how long you take to find the key, not an articulation.",
     "pedal-toggle":
-        "Confronta la battuta di ogni CC64 con gli estremi dello span di pedale. "
-        "A brano fermo l'evento di pedale non ha un passo proprio, quindi il "
-        "confronto sarebbe soddisfatto per costruzione e la regola direbbe "
-        "sempre conforme.",
+        "It compares the bar of every CC64 with the ends of a pedal span. With "
+        "the piece stopped, a pedal event has no step of its own, so the "
+        "comparison would be satisfied by construction and the rule would "
+        "always say passed.",
     "syncopated-pedal":
-        "Chiede che il pedale arrivi dopo l'attacco della nota, leggendo l'ordine "
-        "reale degli eventi. A brano fermo quell'ordine e' quello con cui trovi i "
-        "tasti, non il tempo musicale.",
+        "It wants the pedal to arrive after the note attack, reading the real "
+        "order of events. With the piece stopped that order is how you find "
+        "the keys, not musical time.",
 }
 
 

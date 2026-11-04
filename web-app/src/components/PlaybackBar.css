@@ -13,11 +13,14 @@
   align-items: center;
   padding: 0 1.5rem;
 
-  /* Glassmorphism — Adjusted for better cross-browser compatibility and visibility */
-  background-color: rgba(252, 251, 248, 0.85); /* Fallback and solid base */
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-  border: 1px solid rgba(197, 168, 128, 0.2);
+  /* Fondo SOLIDO: con il vetro semitrasparente (0.85 + blur) le note e il rigo che
+     stanno sotto la pillola si vedevano attraverso, e i tre pulsanti si leggevano a
+     metà. Chi suona guarda la pillola mentre le dita sono gia' sui tasti: il fondo
+     deve essere una superficie chiusa, non un filtro. `--bg-secondary` perche' la
+     pagina e' `--bg-primary`, e due superfici dello stesso colore renderebbero il
+     bordo l'unica cosa che tiene separati i due oggetti. */
+  background-color: var(--bg-secondary, #F3F0EA);
+  border: 1px solid rgba(197, 168, 128, 0.35);
   box-shadow:
     0 10px 30px rgba(0, 0, 0, 0.08),
     inset 0 0 0 1px rgba(255, 255, 255, 0.4);

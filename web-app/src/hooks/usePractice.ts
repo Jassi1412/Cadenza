@@ -231,10 +231,10 @@ export function usePractice(): UsePracticeReturn {
         body: JSON.stringify({ score: scoreXml, hand: handRef.current ?? 'both' }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? `il servizio ha risposto ${res.status}`);
+      if (!res.ok) throw new Error(payload?.error ?? `the service responded with ${res.status}`);
       const list = (payload.steps ?? []) as PracticeStep[];
       if (list.length === 0) {
-        throw new Error('Il servizio non ha trovato passi da suonare in questo spartito.');
+        throw new Error('The service found no steps to practise in this score.');
       }
       setSteps(list);
       setRules((payload.rules ?? []) as string[]);
@@ -312,7 +312,7 @@ export function usePractice(): UsePracticeReturn {
         }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? `il servizio ha risposto ${res.status}`);
+      if (!res.ok) throw new Error(payload?.error ?? `the service responded with ${res.status}`);
       setLast(payload as StepResult);
       setVerdictStep(stepIndex);
       setError(null);

@@ -39,5 +39,5 @@ Root of the Cadenza web application source tree. Hosts the React entry point, th
 ## Child DOX Index
 
 - `pages/` — Route-level page components (Home, Upload, Score, Zelda) and their co-located CSS
-- `components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticeBar)
+- `components/` — Reusable presentational components (MidiPanel, PlaybackBar, PracticeBar, PianoKeyboard)
 - `hooks/` — Domain-logic hooks (useMidi, useVerdict) and the step-by-step practice module (practiceSteps, usePractice)

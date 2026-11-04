@@ -110,17 +110,17 @@ const male = { ok: false, exit: 1 };
 const rottaR = { ok: false, exit: 2 };
 const verdetto = (step, spec) => ({ step, verdicts: spec });
 
-check('tutto conforme: la riga dice conforme',
+check('tutto conforme: la riga dice correct',
   stepProblem({
     last: verdetto(3, { 'pitch-agreement': okR, 'chord-jitter': okR, 'dynamics-adherence': okR }),
     stepIndex: 3, judging: false, error: null, dynamicsOn: true,
-  }).text === 'conforme');
+  }).text === 'correct');
 check('la nota sbagliata passa prima di chord jitter e dinamica', (() => {
   const p = stepProblem({
     last: verdetto(3, { 'pitch-agreement': male, 'chord-jitter': male, 'dynamics-adherence': male }),
     stepIndex: 3, judging: false, error: null, dynamicsOn: true,
   });
-  return p.text === 'nota sbagliata' && p.tone === 'warn';
+  return p.text === 'wrong note' && p.tone === 'warn';
 })());
 check('chord jitter da solo si vede', (() => {
   const p = stepProblem({
@@ -131,31 +131,34 @@ check('chord jitter da solo si vede', (() => {
 })());
 check('dinamica errata si vede solo con l\'interruttore acceso', (() => {
   const last = verdetto(3, { 'pitch-agreement': okR, 'chord-jitter': okR, 'dynamics-adherence': male });
-  return stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: true }).text === 'dinamica errata'
-    && stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: false }).text === 'conforme';
+  return stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: true }).text === 'bad dynamics'
+    && stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: false }).text === 'correct';
 })());
-check('exit 2 non diventa mai "nota sbagliata": e\' il servizio, non l\'allievo', (() => {
+check('exit 2 non diventa mai "wrong note": e\' il servizio, non l\'allievo', (() => {
   const p = stepProblem({
     last: verdetto(3, { 'pitch-agreement': rottaR, 'chord-jitter': okR, 'dynamics-adherence': okR }),
     stepIndex: 3, judging: false, error: null, dynamicsOn: true,
   });
-  return p.text === 'non verificabile' && p.tone === 'broken';
+  return p.text === 'cannot verify' && p.tone === 'broken';
 })());
 check('pitch-range violato conta come nota sbagliata',
   stepProblem({
     last: verdetto(3, { 'pitch-range': male, 'chord-jitter': okR }),
     stepIndex: 3, judging: false, error: null, dynamicsOn: true,
-  }).text === 'nota sbagliata');
+  }).text === 'wrong note');
 check('il verdetto di un passo gia\' lasciato e\' dichiarato vecchio',
   stepProblem({
     last: verdetto(11, { 'pitch-agreement': okR }), stepIndex: 12,
     judging: false, error: null, dynamicsOn: true,
   }).stale === true);
-check('nessun verdetto ancora: nessun "conforme" inventato', (() => {
+check('nessun verdetto ancora: nessuna parola inventata, e nessun "correct"', (() => {
   const p = stepProblem({ last: null, stepIndex: 0, judging: false, error: null, dynamicsOn: true });
-  return p.tone === 'waiting' && p.text === 'suona i tasti del passo';
+  // La scritta d'attesa e' stata tolta dall'interfaccia: il modulo deve dire
+  // "niente da mostrare", perche' il tono `waiting` e' quello che la striscia usa
+  // per non colorarsi di verde sul silenzio.
+  return p.tone === 'waiting' && p.text === '';
 })());
-check('verdetto vuoto perche\' non era premuto niente: non e\' "conforme"',
+check('verdetto vuoto perche\' non era premuto niente: non e\' "correct"',
   stepProblem({
     last: verdetto(3, {}), stepIndex: 3, judging: false, error: null, dynamicsOn: true,
   }).tone === 'waiting');
@@ -163,9 +166,9 @@ check('una richiesta in volo si dichiara come verifica in corso',
   stepProblem({ last: null, stepIndex: 0, judging: true, error: null, dynamicsOn: true }).tone === 'checking');
 check('un errore di rete non e\' un giudizio su come hai suonato', (() => {
   const p = stepProblem({
-    last: null, stepIndex: 0, judging: false, error: 'il servizio ha risposto 502', dynamicsOn: true,
+    last: null, stepIndex: 0, judging: false, error: 'the service responded with 502', dynamicsOn: true,
   });
-  return p.tone === 'warn' && p.text === 'il verdetto non e\' arrivato';
+  return p.tone === 'warn' && p.text === 'no verdict from the service';
 })());
 
 // ---------------------------------------------------------------- noteName

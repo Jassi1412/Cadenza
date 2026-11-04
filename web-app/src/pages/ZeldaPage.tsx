@@ -33,7 +33,7 @@ const ZeldaPage: React.FC = () => {
   useEffect(() => {
     fetch(ZELDA_SCORE_URL)
       .then((r) => {
-        if (!r.ok) throw new Error(`spartito non trovato (${r.status})`);
+        if (!r.ok) throw new Error(`score not found (${r.status})`);
         return r.text();
       })
       .then(setScoreXml)
@@ -80,7 +80,7 @@ const ZeldaPage: React.FC = () => {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload?.error ?? `il servizio ha risposto ${response.status}`);
+        throw new Error(payload?.error ?? `the service responded with ${response.status}`);
       }
       setVerdicts(payload.verdicts as VerdictMap);
       setStatus('done');
@@ -100,17 +100,17 @@ const ZeldaPage: React.FC = () => {
           onClick={() => void askMonitor()}
           disabled={!scoreXml || status === 'working'}
         >
-          {status === 'working' ? 'Verifica in corso…' : 'Invia al monitor'}
+          {status === 'working' ? 'Checking…' : 'Send to monitor'}
         </button>
         <p className="zelda-coldstart">
-          Il servizio su Render si addormenta: il primo verdetto può richiedere ~1 minuto.
+          The Render service falls asleep: the first verdict can take about a minute.
         </p>
       </div>
 
       {status !== 'idle' && (
         <section className="verdict-panel">
           <div className="verdict-panel-head">
-            <h2 className="heading">Il verdetto</h2>
+            <h2 className="heading">Verdicts</h2>
             {status === 'done' && (
               <button
                 className="btn btn-outline"
@@ -119,23 +119,23 @@ const ZeldaPage: React.FC = () => {
                   setVerdicts(null);
                 }}
               >
-                Chiudi
+                Close
               </button>
             )}
           </div>
           {status === 'working' && (
-            <p className="verdict-note">Allineamento e verifica delle sette regole…</p>
+            <p className="verdict-note">Aligning the performance and checking the seven rules…</p>
           )}
           {status === 'error' && <p className="verdict-note verdict-error">{error}</p>}
           {status === 'done' && verdicts && (
             <>
-              <p className="verdict-note">{notes.length} note analizzate</p>
+              <p className="verdict-note">{notes.length} notes analysed</p>
               {verdicts['syncopated-pedal'] && !verdicts['syncopated-pedal'].ok && (
                 <p className="verdict-note">
-                  Il pedale sincopato suona la nota e preme subito dopo: la specifica
-                  riscritta (nel repository, non ancora sul servizio) accetta questa
-                  esecuzione — verificato in locale, exit 0. Il servizio deployato
-                  compila ancora la versione precedente, che la conta come violazione.
+                  The syncopated pedal sounds the note and presses right after it: the
+                  rewritten spec (in the repository, not yet on the service) accepts
+                  this performance — verified locally, exit 0. The deployed service
+                  still compiles the previous version, which counts it as violated.
                 </p>
               )}
               <ul className="verdict-list">
@@ -143,7 +143,7 @@ const ZeldaPage: React.FC = () => {
                   <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
                     <span className="verdict-mark">{v.ok ? '✓' : '✗'}</span>
                     <span className="verdict-name">{key}</span>
-                    <span className="verdict-detail">{v.ok ? 'conforme' : 'violata'}</span>
+                    <span className="verdict-detail">{v.ok ? 'passed' : 'violated'}</span>
                   </li>
                 ))}
               </ul>

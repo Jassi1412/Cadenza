@@ -59,7 +59,7 @@ const MidiPanel: React.FC<MidiPanelProps> = ({ midi }) => {
               <div className="midi-row">
                 <span className="midi-row-label">Device</span>
                 {midi.inputs.length === 0 ? (
-                  <span className="midi-no-device">No MIDI device detected</span>
+                  <span className="midi-no-device">No devices</span>
                 ) : (
                   <select
                     className="midi-select"

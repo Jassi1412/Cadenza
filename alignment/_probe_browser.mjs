@@ -1,7 +1,7 @@
 /**
- * Verifica in un browser VERO la modalita' practice: la striscia dei comandi (contatore
- * dei passi, contatore dei tasti, verdetto compatto), il filtro per mano, il toggle
- * della dinamica, e il cursore di OSMD.
+ * Verifica in un browser VERO la modalita' practice: la striscia dei comandi (il
+ * pulsante che apre la tastiera, il verdetto compatto di una parola, i pulsanti L /
+ * R e D), la tastiera di richiamo coi tasti del passo accesi, e il cursore di OSMD.
  *
  * Perche' serve, quando i test unitari sono gia' verdi. `test_cursor.py` prova
  * la NOSTRA funzione contro un finto cursore: non puo' accorgersi che OSMD
@@ -10,10 +10,17 @@
  * raggruppa le note in voci. L'unico posto dove vederlo e' un browser con lo
  * spartito caricato.
  *
- * La tastiera non c'e': al suo posto si installa un `navigator.requestMIDIAccess`
- * finto che espone una porta MIDI e un metodo per "premere" un tasto. Tutto il
- * resto e' il codice di produzione — useMidi, usePractice, ScorePage, OSMD — che
- * non sa di essere osservato.
+ * Della tastiera ce n'e' una sullo schermo (`.piano-kbd`, il richiamo dei tasti) e
+ * una che non c'e': la tastiera MIDI vera. Al suo posto si installa un
+ * `navigator.requestMIDIAccess` finto che espone una porta e un metodo per "premere"
+ * un tasto. Tutto il resto e' il codice di produzione — useMidi, usePractice,
+ * ScorePage, OSMD — che non sa di essere osservato.
+ *
+ * Cosa guarda, e perche' proprio quelle prove: i numeri che la riga mostrava
+ * ("1/128", "0/2 tasti") non ci sono piu', quindi l'avanzamento dell'esercizio si
+ * prova dai tasti accesi sulla tastiera e dalle richieste che partono, e il numero
+ * di passi del brano — 128 pieno, 88 a mano sinistra, misurati in produzione — si
+ * legge dalla risposta `/practice`, intercettata PRIMA del clic sul pulsante.
  *
  * Uso: node alignment/_probe_browser.mjs
  */
@@ -169,46 +176,86 @@ try {
 
   // ── 2. entrare in pratica ───────────────────────────────────────
   console.log('\n2. Entro nella modalita practice');
+  // Il piano di risposta va intercettato PRIMA del clic: e' l'ultima cosa che dice
+  // quanti passi ha il brano intero, numero che dalla riga e' stato tolto insieme al
+  // contatore dei tasti. Le prove sui filtri per mano si reggono ancora su quello.
+  const rispostaPiano = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
   await page.click('#bar-step-btn');
   await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 90000 });
+  const piano = await (await rispostaPiano).json();
+  const totalePieno = (piano.steps ?? []).length;
+  console.log(`     piano: ${totalePieno} passi, mani ${JSON.stringify(piano.hands)}`);
 
-  // Il contatore dei passi e quello dei tasti sono le due righe della striscia:
-  // niente nomi di note, niente elenco di verdetti. Se uno dei due manca, la barra
-  // non sta dicendo niente di utile.
-  const passoTxt = async () => ((await page.textContent('.pb-step')) ?? '')
-    .trim().replace(/\s+/g, ' ');
-  const tastiTxt = async () => ((await page.textContent('.pb-keys')) ?? '')
-    .trim().replace(/\s+/g, ' ');
+  // I tasti del passo si leggono dalla tastiera accesa, non piu' da un numero.
+  const attesi = () => page.$$eval('.pk-expected',
+    (ks) => ks.map((k) => Number(k.dataset.pitch)).sort((a, b) => a - b));
+  const premuti = () => page.$$eval('.pk-down',
+    (ks) => ks.map((k) => Number(k.dataset.pitch)).sort((a, b) => a - b));
 
-  const contatore = await passoTxt();
-  check('la barra della pratica appare col contatore dei passi',
-    /^\d+\/\d+$/.test(contatore), contatore);
+  check('la tastiera di richiamo appare da sola, senza cliccare niente',
+    await page.locator('.piano-kbd').count() === 1);
   check('il riquadro grande non c\'e\' piu\'',
     await page.locator('.practice-panel').count() === 0);
-  const tasti0 = await tastiTxt();
-  check('dice quanti tasti mancano, senza nominare le note',
-    /^\d+\/\d+ tasti/.test(tasti0), tasti0);
+  check('dalla riga sono spariti sia il contatore dei passi sia quello dei tasti',
+    await page.locator('.pb-step, .pb-keys, .pb-other').count() === 0);
+  const attesi0 = await attesi();
+  check('il primo passo chiede i tasti che dice il piano del servizio',
+    attesi0.join(',') === ((piano.steps?.[0]?.pitch ?? []).slice().sort((a, b) => a - b).join(',')),
+    `tastiera=[${attesi0}] piano=[${(piano.steps?.[0]?.pitch ?? []).join(',')}]`);
+  check('e sono due tasti perche\' all\'inizio si studiano tutte e due le mani',
+    attesi0.length === 2, JSON.stringify(attesi0));
+
+  // Il do centrale marcato e i punti di riferimento scritti: senza quelli la tastiera
+  // e' un disegno astratto, e chi suona deve poter capire DOVE sta il tasto acceso.
+  const etichette = await page.$$eval('.pk-label', (es) => es.map((e) => e.textContent));
+  check('il do centrale e\' marcato col suo nome', etichette.includes('C4'), etichette.join(' '));
+  check('i punti di riferimento sono i do e i fa, non tutte le note', (() => {
+    // Almeno tre ottave di appoggi (do+fa per ottava), e nessun nome in mezzo: a
+    // scrivere ogni tasto il disegno smette di essere una mappa e diventa un elenco.
+    const nomi = etichette.filter((n) => /^[A-F]\d$/.test(n ?? ''));
+    return nomi.length >= 6 && !etichette.includes('D4') && !etichette.includes('G4');
+  })(), `${etichette.length} etichette: ${etichette.join(' ')}`);
 
   // Le tre regole che qui non si applicano non stanno piu' in un <details>: stanno
-  // nel titolo del contatore. Se sparissero del tutto, il silenzio della striscia si
-  // leggerebbe "conforme", che e' la bugia questo progetto non vuole mai dire.
-  const titolo = (await page.getAttribute('.pb-step', 'title')) ?? '';
+  // nel titolo del pulsante tastiera. Se sparissero del tutto, il silenzio della
+  // striscia si leggerebbe "correct", che e' la bugia questo progetto non vuole mai
+  // dire — e ora la riga non ha nemmeno una parola, quindi il rischio e' piu' grande.
+  const titolo = (await page.getAttribute('#bar-keys-btn', 'title')) ?? '';
   const sospese = ['articulation', 'pedal-toggle', 'syncopated-pedal']
     .filter((n) => titolo.includes(n));
   check('le regole che non si applicano restano dichiarate nel titolo',
     sospese.length === 3, `${sospese.length}/3 — ${titolo.replace(/\s+/g, ' ').slice(0, 80)}`);
+  check('il titolo dice anche passo, battuta e tasti, che la riga non mostra piu\'',
+    /Step \d+ of \d+/.test(titolo) && /bar \d+/.test(titolo) && /press /.test(titolo),
+    titolo.replace(/\s+/g, ' ').slice(0, 90));
 
   // ── 3. quanto spazio occupa, e dove sta? ─────────────────────────
-  console.log('\n3. Quanto spazio occupa la striscia?');
+  console.log('\n3. Quanto spazio occupano striscia e tastiera?');
   const lay = await page.evaluate(() => {
     const striscia = document.querySelector('.practice-bar');
     const pillola = document.querySelector('#playback-bar');
+    const kbd = document.querySelector('.piano-kbd');
     const rs = striscia.getBoundingClientRect();
     const rp = pillola.getBoundingClientRect();
+    const rk = kbd ? kbd.getBoundingClientRect() : null;
+    // L'alpha del fondo: le due barre erano semitrasparenti (0.85 + blur) e i
+    // comandi si leggevano a meta'. Il colore calcolato restituisce rgba(...) con
+    // l'alpha in quarta posizione: se c'e' 1 la superficie e' chiusa.
+    const alpha = (el) => {
+      const c = getComputedStyle(el).backgroundColor;
+      const m = c.match(/rgba?\(([^)]*)\)/);
+      if (!m) return -1;
+      const parti = m[1].split(',').map((x) => parseFloat(x.trim()));
+      return parti.length >= 4 ? parti[3] : 1;
+    };
     return {
       vh: window.innerHeight, vw: window.innerWidth,
       h: Math.round(rs.height), top: Math.round(rs.top), bottom: Math.round(rs.bottom),
       pillTop: Math.round(rp.top),
+      kbdH: rk ? Math.round(rk.height) : 0, kbdBottom: rk ? Math.round(rk.bottom) : 0,
+      alphaStriscia: alpha(striscia), alphaPillola: alpha(pillola),
       scrollY: Math.round(window.scrollY),
       docH: document.documentElement.scrollHeight,
     };
@@ -220,6 +267,14 @@ try {
     lay.bottom <= lay.pillTop + 2, `bottom=${lay.bottom} pillola top=${lay.pillTop}`);
   check('non copre l\'inizio dello spartito: sta nel terzo basso dello schermo',
     lay.top > lay.vh * 0.6, `top=${lay.top} su viewport ${lay.vh}`);
+  check('la tastiera sta sopra la striscia, non sotto e non addosso',
+    lay.kbdBottom > 0 && lay.kbdBottom <= lay.top + 2,
+    `kbd bottom=${lay.kbdBottom} striscia top=${lay.top}`);
+  // La richiesta dell'utente, misurata: il vetro rendeva i pulsanti illeggibili.
+  check('il fondo della pillola del trasporto ora e\' solido (alpha 1)',
+    lay.alphaPillola === 1, `alpha=${lay.alphaPillola}`);
+  check('il fondo della striscia della pratica ora e\' solido (alpha 1)',
+    lay.alphaStriscia === 1, `alpha=${lay.alphaStriscia}`);
 
   // ── 4. il cursore, in pratica, dove sta? ────────────────────────
   const passo0 = await page.evaluate(CURSORE);
@@ -237,7 +292,7 @@ try {
   check('cliccandolo si spegne', (await dyn.getAttribute('aria-pressed')) === 'false');
   const dynDopo = (await dyn.getAttribute('title')) ?? '';
   check('spento dice cosa non si guarda piu\'',
-    /Spenta/.test(dynDopo) && dynPrima !== dynDopo, dynDopo.slice(0, 70));
+    /Dynamics off/.test(dynDopo) && dynPrima !== dynDopo, dynDopo.slice(0, 70));
   // Il contratto vero, misurato sulle richieste: la dinamica filtra la VISTA, non la
   // richiesta. Un click che costa un giro di rete renderebbe il giudizio del servizio
   // dipendente dall'interfaccia, e sarebbe la prima volta in questo progetto.
@@ -249,15 +304,22 @@ try {
 
   // ── 6. suonare il primo passo ──────────────────────────────────
   console.log('\n5. Suono il primo passo');
-  const contatorePrima = await passoTxt();
-  for (const p of [46, 93]) await page.evaluate((n) => window.__press(n), p);
-  await page.waitForFunction(() => {
-    const c = document.querySelector('.pb-step');
-    return c && !/^1\//.test(c.textContent.trim());
-  }, null, { timeout: 15000 });
-  const contatoreDopo = await passoTxt();
-  check('il cursore avanza al passo 2', contatoreDopo.startsWith('2/'),
-    `${contatorePrima} -> ${contatoreDopo}`);
+  for (const p of attesi0) await page.evaluate((n) => window.__press(n), p);
+  await page.waitForFunction(() => document.querySelectorAll('.pk-down').length >= 2,
+    null, { timeout: 15000 });
+  check('i tasti chiesti diventano verdi nell\'istante in cui sono premuti',
+    (await premuti()).join(',') === attesi0.join(','),
+    `attesi=[${attesi0}] premuti=[${await premuti()}]`);
+  // L'avanzamento non si legge piu' da "1/128": lo dicono i tasti accesi del passo
+  // successivo, che devono essere diversi da quelli del passo appena finito.
+  await page.waitForFunction((prev) => {
+    const k = [...document.querySelectorAll('.pk-expected')]
+      .map((e) => Number(e.dataset.pitch)).sort((a, b) => a - b).join(',');
+    return !!k && k !== prev;
+  }, attesi0.join(','), { timeout: 15000 });
+  check('il passo e\' avanzato: la tastiera chiede altri tasti',
+    (await attesi()).join(',') !== attesi0.join(','),
+    `[${attesi0}] -> [${await attesi()}]`);
 
   const passo1 = await page.evaluate(CURSORE);
   check('l\'elemento cursore di OSMD si e\' SPOSTATO davvero',
@@ -265,101 +327,140 @@ try {
     `left ${passo0?.left} -> ${passo1?.left}`);
 
   // ── 7. il verdetto compatto al posto dell'elenco ───────────────
-  // Una parola sola al posto di quattro righe. Il viola "non verificabile" e' il
+  // Una parola sola al posto di quattro righe. Il viola "cannot verify" e' il
   // monitor che non e' partito: qui non deve comparire, perche' il servizio gira.
   console.log('\n6. Il verdetto del servizio');
   await page.waitForFunction(() => {
     const p = document.querySelector('#practice-problem');
-    return p && /conforme/.test(p.textContent);
+    return p && /correct/.test(p.textContent);
   }, null, { timeout: 45000 });
   const chip = ((await page.textContent('#practice-problem')) ?? '').trim().replace(/\s+/g, ' ');
   const classiChip = (await page.getAttribute('#practice-problem', 'class')) ?? '';
-  check('il verdetto arriva e dice "conforme"', /conforme/.test(chip), chip);
-  check('il monitor e\' partito: nessun "non verificabile"',
+  check('il verdetto arriva e dice "correct"', /correct/.test(chip), chip);
+  check('il monitor e\' partito: nessun "cannot verify"',
     !/pb-broken/.test(classiChip), classiChip);
 
   // ── 8. la mano destra sola ─────────────────────────────────────
   console.log('\n7. Studio la mano destra sola');
   const dx = page.locator('#bar-hand-right');
-  check('i tre pulsanti della mano ci sono',
-    await page.locator('#bar-hand-all').count() === 1
-    && dx.count() === 1
-    && await page.locator('#bar-hand-left').count() === 1);
+  const sx = page.locator('#bar-hand-left');
+  check('i pulsanti della mano sono due icone e non tre scritte, e il terzo pulsante "Tutte" non c\'e\'',
+    await page.locator('#bar-hand-all').count() === 0 && dx.count() === 1 && sx.count() === 1);
   check('sono attivi perche\' questo spartito ha due righi', !(await dx.isDisabled()));
+  check('all\'inizio sono tutti e due accesi: si studiano tutte e due le mani',
+    ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
+    && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
   const pianiPrima = conta('POST /practice ');
-  const passiPieno = (await passoTxt()).split('/')[1];
+  const rispostaDx = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
   await dx.click();
-  await page.waitForFunction(() => {
-    const s = document.querySelector('.pb-step');
-    return !!s && !document.querySelector('.practice-notice');
-  }, null, { timeout: 120000 });
+  await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
+  const pianoDx = await (await rispostaDx).json();
   check('cambiare mano chiede un piano nuovo',
     conta('POST /practice ') === pianiPrima + 1,
     `${conta('POST /practice ') - pianiPrima} piani nuovi`);
-  const chiaviDx = await tastiTxt();
-  check('con la destra il primo passo chiede UN tasto, non due',
-    /^0\/1 tasti/.test(chiaviDx), `${tasti0} -> ${chiaviDx}`);
-  check('il pulsante della destra risulta attivo',
-    ((await page.getAttribute('#bar-hand-right', 'class')) ?? '').includes('pb-chip-on'));
+  // Misurato in produzione sul brano di prova: con la destra il primo passo chiede UN
+  // pitch perche' l'altro sta sull'altro rigo. Il NUMERO di passi invece resta quello
+  // del brano intero (la destra ha un attacco ovunque), quindi la prova che distingue
+  // un esercizio dall'altro sono i tasti chiesti, non quanti passi conta la riga —
+  // e la riga non li conta nemmeno piu'.
+  const chiestoDx = (pianoDx.steps?.[0]?.pitch ?? []).slice().sort((a, b) => a - b);
+  check('il primo passo della destra chiede un solo tasto',
+    chiestoDx.length === 1, JSON.stringify(pianoDx.steps?.[0]?.pitch));
+  await page.waitForFunction(() => document.querySelectorAll('.pk-expected').length === 1,
+    null, { timeout: 20000 });
+  const attesiDx = await attesi();
+  check('la tastiera accende il solo tasto chiesto dalla destra',
+    attesiDx.join(',') === chiestoDx.join(','), `[${attesiDx}] contro [${chiestoDx}]`);
+  const esclusoDx = (pianoDx.steps?.[0]?.offhand ?? [])[0];
+  check('il tasto dell\'altro rigo resta nel disegno come contesto, non come errore',
+    esclusoDx !== undefined
+    && await page.locator(`.pk-offhand[data-pitch="${esclusoDx}"]`).count() === 1,
+    `escluso=${esclusoDx}`);
+  check('il pulsante scelto risulta acceso e l\'altro spento',
+    ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
+    && !((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
 
   // ── 9. mano sinistra: la nota esclusa si dichiara, non si giudica ──
   console.log('\n8. Mano sinistra: la nota dell\'altro rigo');
-  await page.locator('#bar-hand-left').click();
-  await page.waitForFunction(() => {
-    const s = document.querySelector('.pb-step');
-    return !!s && !document.querySelector('.practice-notice');
-  }, null, { timeout: 120000 });
-  const passiSx = await passoTxt();
-  check('con la sinistra i passi sono meno che nel brano intero',
-    Number(passiSx.split('/')[1]) < Number(passiPieno), `${passiPieno} -> ${passiSx}`);
-
+  const rispostaSx = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
+  await sx.click();
+  await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
+  const pianoSx = await (await rispostaSx).json();
+  const totaleSx = (pianoSx.steps ?? []).length;
+  check('con la sinistra l\'esercizio ha meno passi del brano intero',
+    totaleSx > 0 && totaleSx < totalePieno, `${totalePieno} -> ${totaleSx}`);
+  const chiestoSx = (pianoSx.steps?.[0]?.pitch ?? []).slice().sort((a, b) => a - b);
+  const esclusoSx = (pianoSx.steps?.[0]?.offhand ?? []).slice();
   // Si preme SOLO la nota dell'altro rigo. Non deve far avanzare, non deve essere
   // letta come errore, e deve essere dichiarata: e' il caso che il servizio misura
-  // in test_practice.py (casi 11-12); qui si guarda che lo spartito lo racconti.
-  await page.evaluate(() => window.__press(93));
-  await page.waitForFunction(() => !!document.querySelector('.pb-other'), null,
-    { timeout: 8000 });
-  const altraMano = ((await page.textContent('.pb-other')) ?? '').trim().replace(/\s+/g, ' ');
-  check('la nota dell\'altro rigo si dichiara e non viene contata come errore',
-    /ignorata/.test(altraMano), altraMano);
-  const fermoSx = await passoTxt();
+  // in test_practice.py (casi 11-12); qui si guarda che lo racconti la tastiera.
+  for (const p of esclusoSx) await page.evaluate((n) => window.__press(n), p);
+  await page.waitForTimeout(1500);
+  const violaSx = await page.$$eval('.pk-offhand',
+    (ks) => ks.map((k) => Number(k.dataset.pitch)));
+  check('il tasto ignorato si vede spento-viola sulla tastiera, non rosso',
+    violaSx.includes(esclusoSx[0]),
+    `esclusi=[${esclusoSx}] rossi=${JSON.stringify(await page.$$eval('.pk-extra', (ks) => ks.map((k) => k.dataset.pitch)))}`);
+  const titoloDopoEsclusa = (await page.getAttribute('#bar-keys-btn', 'title')) ?? '';
+  check('e la striscia lo dichiara nel titolo, senza contarla come errore',
+    /other staff/i.test(titoloDopoEsclusa), titoloDopoEsclusa.replace(/\s+/g, ' ').slice(0, 100));
   const chipSx = ((await page.textContent('#practice-problem')) ?? '').trim();
-  check('e non fa avanzare il passo', /^1\//.test(fermoSx), fermoSx);
-  check('e non entra nel verdetto: nessun "nota sbagliata"',
-    !/nota sbagliata/.test(chipSx), chipSx);
+  check('e non entra nel verdetto: nessun "wrong note"',
+    !/wrong note/.test(chipSx), chipSx);
+  check('e l\'esercizio non e\' avanzato',
+    (await attesi()).join(',') === chiestoSx.join(','),
+    `[${await attesi()}] contro [${chiestoSx}]`);
 
   // Ora la nota del rigo studiato: il passo si completa, e la richiesta di verdetto
   // deve portare la stessa mano su cui il piano e' stato costruito.
   const rispostaPasso = page.waitForResponse(
     (r) => r.url().includes('/practice/step'), { timeout: 25000 });
-  await page.evaluate(() => window.__press(46));
+  for (const p of chiestoSx) await page.evaluate((n) => window.__press(n), p);
   await rispostaPasso;
   check('la richiesta di verdetto dichiara la mano sinistra',
     richieste.some((r) => r.startsWith('POST /practice/step') && r.includes('"hand":"left"')),
     richieste.filter((r) => r.startsWith('POST /practice/step')).slice(-1)[0] ?? 'nessuna');
-  await page.waitForFunction(() => {
-    const c = document.querySelector('.pb-step');
-    return c && !/^1\//.test(c.textContent.trim());
-  }, null, { timeout: 15000 });
+  await page.waitForFunction((prev) => {
+    const k = [...document.querySelectorAll('.pk-expected')]
+      .map((e) => Number(e.dataset.pitch)).sort((a, b) => a - b).join(',');
+    return !!k && k !== prev;
+  }, chiestoSx.join(','), { timeout: 15000 });
   check('la nota del rigo studiato fa avanzare',
-    !(await passoTxt()).startsWith('1/'), await passoTxt());
+    (await attesi()).join(',') !== chiestoSx.join(','), await attesi());
 
   // ── 10. si torna al brano intero, e una nota sbagliata blocca ───
   console.log('\n9. Di nuovo tutte le mani, e una nota sbagliata blocca');
-  await page.locator('#bar-hand-all').click();
-  await page.waitForFunction(() => {
-    const s = document.querySelector('.pb-step');
-    return !!s && !document.querySelector('.practice-notice')
-      && /^1\//.test(s.textContent.trim());
-  }, null, { timeout: 120000 });
-  const fermoPrima = await passoTxt();
-  const chiaviFermo = await tastiTxt();
+  const rispostaTutte = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
+  // Premere il pulsante GIA' scelto è quello che riporta a tutte e due le mani: non
+  // esiste piu' un terzo pulsante che lo dica al posto loro.
+  await sx.click();
+  await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
+  await rispostaTutte;
+  check('il tocco sullo stesso rigo riporta a tutte e due le mani',
+    ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
+    && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
+  await page.waitForFunction(() => document.querySelectorAll('.pk-expected').length === 2,
+    null, { timeout: 20000 });
+  const attesiTutte = await attesi();
+  check('e la tastiera chiede di nuovo tutti e due i tasti',
+    attesiTutte.length === 2, JSON.stringify(attesiTutte));
+
+  const cursorePrima = await page.evaluate(CURSORE);
   await page.evaluate(() => window.__press(61));
   await page.waitForTimeout(1500);
-  check('il passo non avanza su una nota fuori dallo spartito',
-    (await passoTxt()) === fermoPrima, `${fermoPrima} -> ${await passoTxt()}`);
-  check('e il contatore dei tasti resta spento, perche' + '\'' + ' il passo non e\' completo',
-    !((await page.getAttribute('.pb-keys', 'class')) ?? '').includes('pb-keys-ok'), chiaviFermo);
+  check('il tasto premuto fuori dallo spartito si accende di rosso',
+    await page.locator('.pk-extra[data-pitch="61"]').count() === 1);
+  check('ma il passo non avanza, e la tastiera chiede ancora gli stessi tasti',
+    (await attesi()).join(',') === attesiTutte.join(','), `[${await attesi()}]`);
+  const cursoreDopo = await page.evaluate(CURSORE);
+  check('e il cursore non si e\' mosso', cursorePrima?.left === cursoreDopo?.left,
+    `${cursorePrima?.left} -> ${cursoreDopo?.left}`);
 
   // ── 11. uscire dalla pratica ──────────────────────────────────
   console.log('\n10. Esco dalla pratica');
@@ -367,6 +468,8 @@ try {
   await page.click('#bar-step-btn');
   await page.waitForSelector('.practice-bar', { state: 'detached', timeout: 15000 });
   check('la striscia sparisce', await page.locator('.practice-bar').count() === 0);
+  check('e sparisce anche la tastiera di richiamo',
+    await page.locator('.piano-kbd').count() === 0);
   check('la barra torna in modalita normale',
     (await page.textContent('#bar-step-btn')).includes('Practice'));
   check('il cursore si nasconde',

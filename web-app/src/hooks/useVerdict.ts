@@ -176,7 +176,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
     if (busy.current) return;
     const { notes, control_changes, tempo_factor } = toPerformance(events, tempoFactor);
     if (notes.length === 0) {
-      setError('Nessuna nota registrata: suona il brano prima di chiedere il verdetto.');
+      setError('Nothing was recorded: play the piece before asking for a verdict.');
       setStatus('error');
       return;
     }
@@ -192,7 +192,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload?.error ?? `il servizio ha risposto ${response.status}`);
+        throw new Error(payload?.error ?? `the service responded with ${response.status}`);
       }
       setVerdicts(payload.verdicts as VerdictMap);
       setStatus('done');

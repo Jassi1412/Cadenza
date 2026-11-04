@@ -164,12 +164,12 @@ describe('stepProblem', () => {
     ({ step, verdicts });
   const nessunVerdetto = { last: null, stepIndex: 0, judging: false, error: null, dynamicsOn: true };
 
-  it('dice conforme quando tutte le regole passano', () => {
+  it('dice correct quando tutte le regole passano', () => {
     const p = stepProblem({
       last: daVerdetto(3, { 'pitch-agreement': ok, 'chord-jitter': ok, 'dynamics-adherence': ok }),
       stepIndex: 3, judging: false, error: null, dynamicsOn: true,
     });
-    expect(p.text).toBe('conforme');
+    expect(p.text).toBe('correct');
     expect(p.tone).toBe('ok');
   });
 
@@ -180,7 +180,7 @@ describe('stepProblem', () => {
       last: daVerdetto(3, { 'pitch-agreement': male, 'chord-jitter': male, 'dynamics-adherence': male }),
       stepIndex: 3, judging: false, error: null, dynamicsOn: true,
     });
-    expect(p.text).toBe('nota sbagliata');
+    expect(p.text).toBe('wrong note');
   });
 
   it('chord jitter da solo si vede', () => {
@@ -196,19 +196,19 @@ describe('stepProblem', () => {
     // guardarla: e' la scelta che decide cosa occupy lo schermo.
     const last = daVerdetto(3, { 'pitch-agreement': ok, 'chord-jitter': ok, 'dynamics-adherence': male });
     expect(stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: true }).text)
-      .toBe('dinamica errata');
+      .toBe('bad dynamics');
     expect(stepProblem({ last, stepIndex: 3, judging: false, error: null, dynamicsOn: false }).text)
-      .toBe('conforme');
+      .toBe('correct');
   });
 
   it('exit 2 non diventa mai un giudizio su chi suona', () => {
-    // E' il monitor che non e' partito. Mostrarlo come "nota sbagliata" vorrebbe dire
+    // E' il monitor che non e' partito. Mostrarlo come "wrong note" vorrebbe dire
     // accusare l'allievo del guasto di un pezzo del servizio.
     const p = stepProblem({
       last: daVerdetto(3, { 'pitch-agreement': rotta, 'chord-jitter': ok, 'dynamics-adherence': ok }),
       stepIndex: 3, judging: false, error: null, dynamicsOn: true,
     });
-    expect(p.text).toBe('non verificabile');
+    expect(p.text).toBe('cannot verify');
     expect(p.tone).toBe('broken');
   });
 
@@ -217,7 +217,7 @@ describe('stepProblem', () => {
       last: daVerdetto(3, { 'pitch-range': male, 'chord-jitter': ok }),
       stepIndex: 3, judging: false, error: null, dynamicsOn: true,
     });
-    expect(p.text).toBe('nota sbagliata');
+    expect(p.text).toBe('wrong note');
   });
 
   it('dichiara vecchio il verdetto di un passo gia\' lasciato', () => {
@@ -230,13 +230,16 @@ describe('stepProblem', () => {
     expect(p.stale).toBe(true);
   });
 
-  it('non inventa un "conforme" quando non c\'e\' nessun verdetto', () => {
+  it('non inventa un "correct" quando non c\'e\' nessun verdetto', () => {
     const p = stepProblem(nessunVerdetto);
     expect(p.tone).toBe('waiting');
-    expect(p.text).toBe('suona i tasti del passo');
+    // Nessuna parola, non una d'attesa: la riga della pratica mostra solo il
+    // giudizio, e l'attesta' la si vede dal punto che pulsa. Cio' che conta qui e'
+    // che il tono NON sia `ok`: un "correct" sul silenzio e' la bugia proibita.
+    expect(p.text).toBe('');
   });
 
-  it('il verdetto vuoto perche\' non era premuto niente non e\' "conforme"', () => {
+  it('il verdetto vuoto perche\' non era premuto niente non e\' "correct"', () => {
     // Il servizio risponde `verdicts: {}` quando non c'era niente da giudicare,
     // apposta per non premiare il silenzio.
     const p = stepProblem({
@@ -246,8 +249,8 @@ describe('stepProblem', () => {
   });
 
   it('un errore di rete non e\' un modo di suonare', () => {
-    const p = stepProblem({ ...nessunVerdetto, error: 'il servizio ha risposto 502' });
+    const p = stepProblem({ ...nessunVerdetto, error: 'the service responded with 502' });
     expect(p.tone).toBe('warn');
-    expect(p.text).toBe('il verdetto non e\' arrivato');
+    expect(p.text).toBe('no verdict from the service');
   });
 });
