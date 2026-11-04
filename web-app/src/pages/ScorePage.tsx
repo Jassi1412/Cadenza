@@ -197,6 +197,17 @@ const ScorePage: React.FC = () => {
   // `position`, non c'è nessun fattore di tempo da mandare al servizio.
   const practice = usePractice();
   const [isPractice, setIsPractice] = useState(false);
+  /**
+   * Cosa sta aspettando l'avvio della pratica, se qualcosa.
+   *
+   * `'midi'` = il browser sta chiedendo il permesso MIDI, e nessuno ha
+   * risposto ancora. `'piano'` = il servizio sta leggendo lo spartito e
+   * preparando i passi.
+   *
+   * Non e' un dettaglio: senza questo stato l'attesa e' muta, e il pulsante
+   * sembra non funzionare. Vedi `startPractice`.
+   */
+  const [preparing, setPreparing] = useState<'midi' | 'piano' | null>(null);
 
   // Dove comincia, dentro `midi.recording`, la roba del passo corrente.
   //
@@ -228,17 +239,40 @@ const ScorePage: React.FC = () => {
     stepStartRef.current = 0;
     lastLenRef.current = 0;
     lastSigRef.current = '';
+    // L'attesa del permesso MIDI e' DICHIARATA, non muta.
+    //
+    // Il permesso Web MIDI e' una richiesta del browser: se nessuno risponde,
+    // `midi.enable()` non risolve e non respinge — resta li'. Senza un avviso,
+    // il bottone passava a "Exit" e non succedeva NULLA per due minuti: si
+    // credeva che il pulsante non funzionasse. In pratica, in un browser dove
+    // nessuno clicca "Consenti", l'esercizio era irraggiungibile senza
+    // nessuna spiegazione.
+    setPreparing('midi');
     if (!midi.isEnabled) {
-      await midi.enable();
+      try {
+        await midi.enable();
+      } catch (err) {
+        console.error('[ScorePage] permesso MIDI negato:', err);
+        setPreparing(null);
+        practice.reset();
+        setIsPractice(false);
+        return;
+      }
       // L'input si popola al tick successivo: senza questa attesa le prime note
       // del primo passo non arriverebbero a nessuno.
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
+    setPreparing('piano');
     await practice.start(await file.text());
+    setPreparing(null);
   }, [file, midi, practice]);
 
   const stopPractice = useCallback(() => {
     setIsPractice(false);
+    // Anche l'attesa va interrotta: senza questo, uscire mentre il browser
+    // chiede il permesso lascerebbe a schermo il pannello "concedi il
+    // permesso", con la pratica gia' chiusa.
+    setPreparing(null);
     practice.reset();
     stepStartRef.current = 0;
     lastLenRef.current = 0;
@@ -578,7 +612,7 @@ const ScorePage: React.FC = () => {
 
   // Stop interrompe anche una prova in corso. La registrazione resta: se il
   // brano è stato interrotto a metà, il musicista di solito vuole riascoltare
-  // quello che ha già suonato, e "Suona insieme" riparte comunque da zero.
+  // quello che ha già suonato, e "Play along" riparte comunque da zero.
   const handleStop = useCallback(() => {
     const player = playerRef.current;
     if (!player) return;
@@ -636,8 +670,26 @@ const ScorePage: React.FC = () => {
       {/* Pannello della pratica. Sta al posto dei verdetti, non accanto: sono
           due modi diversi di giudicare la stessa esecuzione, e mostrarli
           insieme farebbe credere che il verdetto a fine brano valga anche qui. */}
-      {isPractice && practice.phase !== 'idle' && (
-        practice.phase === 'error' ? (
+      {isPractice && (practice.phase !== 'idle' || preparing !== null) && (
+        preparing === 'midi' ? (
+          /* L'attesa del permesso. Il browser ha aperto una finestra di
+             conferma: se nessuno risponde, questa resta l'unica cosa che si
+             vede, ed e' gia' il motivo per cui non succede nient'altro. */
+          <section className="practice-panel">
+            <div className="practice-panel-head">
+              <h2 className="heading">Pratica</h2>
+              <button className="btn btn-outline" onClick={stopPractice}>Chiudi</button>
+            </div>
+            <p className="practice-idle">
+              Concedi il permesso alla tastiera MIDI per suonare i passi. La
+              domanda del browser potrebbe essere gia' aperta dietro questa finestra.
+            </p>
+          </section>
+        ) : preparing === 'piano' ? (
+          <section className="practice-panel">
+            <p className="practice-idle">Sto leggendo lo spartito e preparando i passi…</p>
+          </section>
+        ) : practice.phase === 'error' ? (
           <section className="practice-panel">
             <div className="practice-panel-head">
               <h2 className="heading">Pratica</h2>

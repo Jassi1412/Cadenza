@@ -83,13 +83,13 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         </div>
       )}
 
-      {/* Play / Pause — ascolto puro, non registra nulla. Spento in pratica: lì
+      {/* Playback / Pause — ascolto puro, non registra nulla. Spento in pratica: lì
           il brano non scorre, e un tasto che sembra avviarlo sarebbe una bugia. */}
       <button
         className={`bar-btn ${isPlaying ? 'active' : ''}`}
         onClick={onPlayPause}
         disabled={isLoading || isTakeActive || isPractice}
-        title={isPlaying ? 'Pause' : 'Play'}
+        title={isPlaying ? 'Pause' : 'Playback — ascolta e basta'}
         id="bar-play-btn"
       >
         <span
@@ -100,7 +100,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         >
           {isPlaying ? 'pause_circle' : 'play_circle'}
         </span>
-        <span className="bar-btn-label">{isPlaying ? 'Pause' : 'Play'}</span>
+        <span className="bar-btn-label">{isPlaying ? 'Pause' : 'Playback'}</span>
       </button>
 
       {/* Stop / Rewind */}
@@ -131,7 +131,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         id="bar-practice-btn"
       >
         <PlayAlongIcon />
-        <span className="bar-btn-label">{isTakeActive ? 'In corso' : 'Suona insieme'}</span>
+        <span className="bar-btn-label">{isTakeActive ? 'Recording' : 'Play along'}</span>
       </button>
 
       {/* Modalità a passi: il brano sta fermo e avanza di una nota alla volta.
@@ -152,7 +152,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         >
           {isPractice ? 'close' : 'piano'}
         </span>
-        <span className="bar-btn-label">{isPractice ? 'Esci' : 'Un passo'}</span>
+        <span className="bar-btn-label">{isPractice ? 'Exit' : 'Practice'}</span>
       </button>
 
       {/* Il tempo sparisce in pratica. Non e' disabilitato: qui non esiste.

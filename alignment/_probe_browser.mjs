@@ -105,6 +105,35 @@ page.on('request', (r) => {
   if (u.includes(':8080/')) richieste.push(u.replace('http://127.0.0.1:8080', ''));
 });
 
+// ── 0. il permesso MIDI che nessuno concede ─────────────────────
+//
+// E' il caso peggiore della modalita': il browser apre la finestra di conferma
+// e nessuno clicca "Consenti". Senza un avviso, il bottone passa a "Exit" e
+// non succede NULLA: si crede che il pulsante sia rotto. Qui il permesso non
+// viene mai concesso, e la pagina DEVE dire che cosa sta aspettando.
+const paginaBloccata = await context.newPage();
+await paginaBloccata.addInitScript(`
+  navigator.requestMIDIAccess = () => new Promise(() => {});
+`);
+await paginaBloccata.goto(`${APP}/upload`, { waitUntil: 'domcontentloaded' });
+await paginaBloccata.setInputFiles('input[type="file"]', SCORE);
+await paginaBloccata.waitForSelector('button:has-text("Open Score")', { timeout: 20000 });
+await paginaBloccata.click('button:has-text("Open Score")');
+await paginaBloccata.waitForSelector('#playback-bar', { timeout: 60000 });
+await paginaBloccata.waitForFunction(() => !!document.querySelector('#sheet-container svg'), null,
+  { timeout: 60000 });
+await paginaBloccata.click('#bar-step-btn');
+try {
+  await paginaBloccata.waitForSelector('.practice-panel', { timeout: 15000 });
+  const avviso = (await paginaBloccata.textContent('.practice-panel')) ?? '';
+  check('senza permesso MIDI il pannello dice cosa aspettava',
+    /permesso/i.test(avviso), avviso.trim().replace(/\s+/g, ' ').slice(0, 90));
+} catch {
+  check('senza permesso MIDI il pannello dice cosa aspettava', false,
+    'nessun pannello dopo 15 s: l\'attesa e\' muta');
+}
+await paginaBloccata.close();
+
 try {
   // ── 1. caricamento dello spartito ────────────────────────────────
   console.log('\n1. Carico lo spartito');
@@ -135,7 +164,6 @@ try {
   await page.waitForSelector('.practice-panel', { timeout: 90000 });
   const totale = await page.textContent('.practice-counter');
   check('il pannello della pratica appare', !!totale, (totale ?? '').trim().replace(/\s+/g, ' '));
-
   const chiavi = await page.$$eval('.practice-key', (els) =>
     els.map((e) => ({ testo: e.textContent.trim(), todo: e.classList.contains('practice-key-todo') })));
   check('le chiavi del primo passo sono elencate', chiavi.length > 0,
@@ -265,7 +293,7 @@ try {
   await page.waitForSelector('.practice-panel', { state: 'detached', timeout: 15000 });
   check('il pannello sparisce', await page.locator('.practice-panel').count() === 0);
   check('la barra torna in modalita normale',
-    (await page.textContent('#bar-step-btn')).includes('Un passo'));
+    (await page.textContent('#bar-step-btn')).includes('Practice'));
   check('il cursore si nasconde',
     await page.evaluate(CURSORE).then((c) => !c || !c.vis));
 

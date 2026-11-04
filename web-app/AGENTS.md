@@ -88,6 +88,9 @@ Default section order:
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
+- Button labels are the English mode names — `Playback`, `Play along`, `Practice` — and so are their state labels `Pause`, `Recording`, `Exit`. Tooltips, panel copy and rule reasons stay Italian: the label is the name, the tooltip is the explanation.
+- When the user confirms a change, commit AND push in the same pass. Nothing they can see on the deployed site changes until the work reaches `main`; stopping at a local commit leaves them looking at the old build. The front-end ships to Vercel (`vercel.json`, SPA rewrite); Render runs only the backend (`../render.yaml`, one Docker service, `autoDeployTrigger: commit`), so the push is what refreshes both.
+
 ## Child DOX Index
 
 - `src/` — Application source root: React entry point (`main.tsx`), top-level router (`App.tsx`), global stylesheets, and three durable subdomains:

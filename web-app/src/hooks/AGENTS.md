@@ -46,7 +46,7 @@ Stateful React hooks that encapsulate cross-cutting domain logic — MIDI device
 - `node alignment/run_practice_tests.mjs` — compiles `practiceSteps.ts` with tsc and executes it on node, 18 checks. The fallback that works when vitest cannot start (Vite calls `execFile`, which a sandboxed environment denies), and it runs the same emitted module the bundle uses
 - `python alignment/test_cursor.py` — 21 checks on the cursor-walk logic, with an OSMD stand-in (`Iterator.EndReached`, `Iterator.CurrentMeasure.MeasureNumber`, `next`, `reset`, `show`, `hide`). It tests OUR function, not OSMD: it cannot catch an OSMD API change, which is what the browser check is for
 - `python alignment/test_cursor_sequence.py` — the real 128-step sequence against a cursor built from the real score. It asserts 128/128 steps positioned, 128/128 on the right measure, 128/128 cursor movements, zero backward walks. The voices are deliberately shifted by 36 semitones, like OSMD does: if the function depended on pitch, this test would fail
-- Manual: connect a MIDI keyboard, press "Suona insieme", play the whole score, and check that the verdict arrives by itself. Then press "Un passo" and check that the cursor advances only when every note of the step has been pressed, that the OSMD cursor moves to the note of the current step, and that the dynamics toggle changes the sentence under it
+- Manual: connect a MIDI keyboard, press "Play along", play the whole score, and check that the verdict arrives by itself. Then press "Practice" and check that the cursor advances only when every note of the step has been pressed, that the OSMD cursor moves to the note of the current step, and that the dynamics toggle changes the sentence under it
 
 ## Child DOX Index
 

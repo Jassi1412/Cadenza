@@ -66,8 +66,8 @@ Top-level page components — one per application route. Each page composes hook
 
 - `npm run lint` — ESLint
 - `npm run build` — TypeScript type-check + Vite build
-- Manual: upload a `.musicxml` file, verify rendering, then press "Suona insieme" and check that the countdown runs, the score plays, and the verdict arrives without pressing anything
-- Manual (practice): press "Un passo", check the plan loads, then play a step. The cursor must advance only when every note of the step has been pressed, an extra note must NOT block it, the key colours must be immediate while the verdicts arrive a couple of seconds later, and the three suspended rules must be listed with their reason
+- Manual: upload a `.musicxml` file, verify rendering, then press "Play along" and check that the countdown runs, the score plays, and the verdict arrives without pressing anything
+- Manual (practice): press "Practice", check the plan loads, then play a step. The cursor must advance only when every note of the step has been pressed, an extra note must NOT block it, the key colours must be immediate while the verdicts arrive a couple of seconds later, and the three suspended rules must be listed with their reason
 - `node ../alignment/_probe_browser.mjs` — 28 checks in a real browser (Chromium via CDP): the score renders, the practice panel appears with the three suspended rules, the keys and the step number are visible WITHOUT scrolling, the dynamics toggle switches the caption and filters only its own row, playing the right notes advances the cursor and the OSMD cursor element really moves, a wrong note does not advance, the verdicts arrive as "conforme", and the cursor hides on exit. It needs the dev server on port 5173 and the service on 8080, and it fakes `navigator.requestMIDIAccess` so no keyboard is required
 
 ## Child DOX Index
