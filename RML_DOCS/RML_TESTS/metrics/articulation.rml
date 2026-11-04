@@ -78,4 +78,15 @@ anyNoteOn matches {type:'noteon'};
 
 // L'unione e' `\/`, non `|`: il `|` delle dichiarazioni matches letto qui dentro
 // consumerebbe due eventi per passo e la traccia non quadra piu'.
-Main = anyNoteOn >> (staccatoOk \/ tenutoOk \/ legatoOk \/ noMark \/ noGap)*;
+//
+// noGap viene PRIMA di staccatoOk/tenutoOk/legatoOk, e l'ordine e' un vincolo,
+// non un gusto. I tipi con il cartiglio legano `gapMs` a una variabile e poi la
+// usano in `0.75 * g`: sull'ULTIMO attacco gapMs e' null, la `with` fa aritmetica
+// su null e SWI-Prolog solleva `Type error: clpr_expression expected, found null`.
+// L'errore non e' un fallimento pulito — la specifica muore, e il verdetto
+// diventa "errore" invece di "conforme" — e succede ogni volta che uno spartito
+// finisce su una nota con il cartiglio. Con noGap per primo l'ultimo attacco
+// aggancia il ramo che lo riguarda e le altre `with` non vengono mai valutate.
+// Il ramo noGap aggancia solo gapMs null, cioe' solo l'ultimo attacco: nessun
+// altro evento cambia ramo per effetto di questo riordino.
+Main = anyNoteOn >> (noGap \/ staccatoOk \/ tenutoOk \/ legatoOk \/ noMark)*;
