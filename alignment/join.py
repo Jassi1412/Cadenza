@@ -31,6 +31,15 @@ DYN_VELOCITY = {
     "f": 87.5, "ff": 103.5, "fff": 119.5,
 }
 
+# Tolleranza del gesto del piede, in battute. E' lo STESSO numero che verifica
+# pedal-toggle.pl (`abs(B - S) =< 0.25`): se qui lo span venisse agganciato solo
+# entro 0,05 come per le note, la finestra larga della specifica sarebbe codice
+# morto e un pedale umano, che non arriva sul millisecondo, verrebbe sempre
+# giudicato sbagliato. Meta' battuta a 120 = 250 ms: abbastanza largo per il
+# piede, ancora abbastanza corto per accorgersi di un pedale premuto in ritardo
+# di una battuta intera. Se cambi questo numero, cambia anche li'.
+PEDAL_BEAT_TOL = 0.25
+
 
 def _beat_of(part, t):
     """Conversioni in divisioni -> battuta, seguendo la misura in vigore.
@@ -151,6 +160,15 @@ class ScoreModel:
             notes.append(nota)
         notes.sort(key=lambda x: (x["onset"], x["pitch"]))
         cls._propagate_articulations(notes)
+
+        # legature: anche la <slur> sta nel file, non nelle colonne di partitura.
+        # Una nota dentro una legatura deve IL suo suono fino all'attacco dopo:
+        # lo spartito lo chiede, e il cartiglio atteso diventa "legato".
+        for span in cls._read_slurs(path, part):
+            for n in notes:
+                if (span["start"] - 0.02 <= n["onset"] < span["end"] - 0.02
+                        and n["articulation"] in (None, "tenuto")):
+                    n["articulation"] = "legato"
 
         # Gruppi di note simultanee NELLO SPARTITO: due note con lo stesso
         # attacco sono premute nello stesso istante, quindi vanno insieme.
@@ -419,6 +437,51 @@ class ScoreModel:
         # una pressione all'apertura e un rilascio alla chiusura di ciascuna.
         return pedals
 
+    @staticmethod
+    def _read_slurs(path, part):
+        """<slur type='start'> ... <slur type='stop'> -> span in beat.
+
+        La legatura non sta in una colonna di partitura: vive nei <notations>
+        delle note. Si cammina la misura come per i pedali: l'apertura prende
+        l'attacco della nota che la porta, la chiusura l'estensione di quella
+        nota (la legatura arriva fino a li', e la nota dopo e' un nuovo attacco
+        dal quale il suono deve arrivare senza buco).
+        """
+        from lxml import etree
+
+        tree = etree.parse(path)
+        root = tree.getroot()
+
+        spans, offset, open_at = [], 0.0, {}
+        for m in root.findall(".//measure"):
+            cursor = 0.0
+            for child in m:
+                if child.tag == "note":
+                    is_chord = child.find("chord") is not None
+                    at_onset = _beat_of(part, offset + cursor)
+                    d = child.findtext("duration")
+                    after = cursor + (float(d) if d and not is_chord else 0.0)
+                    for s in child.findall("notations/slur"):
+                        num = s.get("number", "1")
+                        if at_onset is None:
+                            continue
+                        if s.get("type") == "start":
+                            open_at[num] = at_onset
+                        elif s.get("type") == "stop" and num in open_at:
+                            end_at = _beat_of(part, offset + after)
+                            if end_at is not None and end_at > open_at[num]:
+                                spans.append({"start": open_at.pop(num), "end": end_at})
+                    cursor = after
+                elif child.tag == "backup":
+                    d = child.findtext("duration")
+                    if d:
+                        cursor -= float(d)
+            offset += cursor
+        for num, at in open_at.items():
+            spans.append({"start": at, "end": float("inf")})
+        spans.sort(key=lambda x: x["start"])
+        return spans
+
     # ------------------------------------------------------------- le query
 
     @staticmethod
@@ -446,7 +509,9 @@ class ScoreModel:
         Tolleranza e non uguaglianza: l'ultima battuta del brano non ha un
         attacco su cui snap_beat possa agganciarsi, e il rilascio finale
         arriverebbe come 31,9983 senza trovare lo span che chiude a 32.
-        eps e' la stessa meta' sedicesima che usa snap_beat.
+        eps di default e' la meta' sedicesima di snap_beat, ma per il pedale
+        si passa esplicitamente PEDAL_BEAT_TOL: il piede non arriva sul
+        millisecondo, e la soglia vera e' quella della specifica.
         """
         return next((p for p in self.pedals if abs(p["start"] - beat) <= eps), None)
 
@@ -698,8 +763,26 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
 
     # il pedale: solo quello che l'esecuzione ha davvero premuto, annotato con
     # quello che lo spartito chiedeva in quel punto. Non si inventano eventi.
+    #
+    # Un pianoforte digitale non manda "giu'/su'": il sustain e' un continuo e
+    # la discesa del piede produce una raffica di valori crescenti (8, 41, 96,
+    # 127), la salita una decrescente. Le specifiche riconoscono il gesto solo a
+    # valori esatti (value:127 per la pressione, value:0 per il rilascio), cosi'
+    # come le macchine sintetiche dei test lo emettono. Un pedale vero, che non
+    # si fermasse mai esattamente su quei due numeri, non avrebbe mai matchato
+    # niente e risulterebbe sempre assente: la traccia allora conserva SOLO gli
+    # attraversamenti della soglia 64, riscritti nei due valori canonici. Il
+    # tempo resta quello fisico del messaggio che ha attraversato; dei valori
+    # intermedi della stessa raffica non c'e' nulla da dire.
+    pedal_state = False                      # False: su, True: giu'
     for c in control_changes or []:
         t = c["time_ms"]
+        if c["controller"] == 64:
+            down = c["value"] >= 64
+            if down == pedal_state:
+                continue                     # meta' raffica: non e' un gesto
+            pedal_state = down
+            c = {"time_ms": t, "controller": 64, "value": 127 if down else 0}
         beat = model.snap_beat(model.beat_at(t / tempo_factor))
         e = model.expected_at(beat)
         # lo span di riferimento dipende dal gesto. La pressione sta dove lo
@@ -708,9 +791,9 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
         # check "contenuto" guarderebbe oltre il bordo e prenderebbe lo span
         # successivo (o niente): va chiesto esplicitamente lo span che finisce.
         if c["controller"] == 64 and c["value"] == 127:
-            span = model.span_starting_at(beat)
+            span = model.span_starting_at(beat, PEDAL_BEAT_TOL)
         elif c["controller"] == 64 and c["value"] == 0:
-            span = model.span_ending_at(beat)
+            span = model.span_ending_at(beat, PEDAL_BEAT_TOL)
         else:
             span = e["span"]
         events.append({
