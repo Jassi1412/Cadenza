@@ -11,6 +11,16 @@
 services:
   - type: web
     name: cadenza
+    # Il repository da cui fare la build, esplicitamente.
+    #
+    # PERCHE' ESPLICITO. GitHub ha spostato questo repository da
+    # UnlikeKat/Cadenza a Jassi1412/Cadenza, e Render era ancora agganciato al
+    # nome vecchio: l'API di GitHub rispondeva 404 sul repository, e il deploy
+    # non partiva piu'. Senza `repo` qui, il blueprint prende il collegamento
+    # dal servizio esistente — che e' quello rotto. Dichiararlo rende la
+    # configurazione del servizio leggibile dal file, che e' il posto dove si
+    # guarda quando qualcosa non gira.
+    repo: https://github.com/Jassi1412/Cadenza
     runtime: docker
     dockerfilePath: ./service/Dockerfile
     dockerContext: .
@@ -24,3 +34,9 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      # Le risposte contengono i motivi delle regole sospese, che sono in
+      # italiano e hanno accenti. Senza questo, il JSON verrebbe scritto in
+      # ASCII e gli accenti diventerebbero sequenze di escape: leggibile, ma
+      # diverso da quello che il frontend mostra.
+      - key: PYTHONIOENCODING
+        value: "utf-8"
