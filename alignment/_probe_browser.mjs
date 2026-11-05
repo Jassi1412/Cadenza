@@ -207,6 +207,44 @@ try {
   check('e sono due tasti perche\' all\'inizio si studiano tutte e due le mani',
     attesi0.length === 2, JSON.stringify(attesi0));
 
+  // LA TASTIERA MOSTRA TUTTI E 88 I TASTI (richiesta esplicita dell'utente). Questa
+  // prova esiste perche' la prima versione disegnava una finestra calcolata sui passi
+  // e aveva i nomi delle variabili scambiati: l'altezza della finestra veniva chiusa
+  // sul pitch piu' BASSO del brano, quindi sul brano di prova compariva un'ottava sola
+  // e il secondo tasto del passo -- l'A5 -- non era nemmeno disegnato. tsc non lo
+  // diceva (i conti erano legibili); lo dice solo un conteggio dei tasti.
+  const bianchi = await page.$$eval('.pk-white', (ks) => ks.length);
+  const neri = await page.$$eval('.pk-black', (ks) => ks.length);
+  check('la tastiera e\' quella intera: 52 bianchi + 36 neri = 88 tasti',
+    bianchi === 52 && neri === 36, `bianchi=${bianchi} neri=${neri}`);
+  // Gli estremi si misurano su TUTTI i tasti disegnati, non su un finto
+  // ":first-child/:last-child" dei bianchi: i neri vengono renderizzati dopo, quindi
+  // l'ultimo figlio della riga e' nero e quel selettore non avrebbe preso nulla.
+  const tastierini = await page.$$eval('.pk-key',
+    (ks) => ks.map((k) => Number(k.dataset.pitch)));
+  check('e va da A0 a C8, gli stessi due estremi citati dalle specifiche RML',
+    Math.min(...tastierini) === 21 && Math.max(...tastierini) === 108,
+    `min=${Math.min(...tastierini)} max=${Math.max(...tastierini)} tasti=${tastierini.length}`);
+  // Nessun pitch chiesto o dichiarato fuori dal disegno: e' la regressione esatta del
+  // bug della finestra, e va misurata sui dati del piano, non su numeri inventati.
+  const daDisegnare = [...new Set([
+    ...(piano.steps?.[0]?.pitch ?? []), ...(piano.steps?.[0]?.offhand ?? [])])];
+  const mancanti = daDisegnare.filter((p) => !tastierini.includes(p));
+  check('ogni tasto che il primo passo chiede o dichiara e\' realmente disegnato',
+    mancanti.length === 0, `mancano [${mancanti}] su [${daDisegnare}]`);
+  // Un diesis acceso senza nome e' una figurina scura, e per saperlo bisognerebbe
+  // contare i semitoni dal do vicino: il nome va scritto sul tasto nero quando quel
+  // tasto e' in gioco. Sul brano di prova il passo chiede 46, che e' un nero, quindi
+  // la prova ha un caso vero su cui girare e non e' scritta a vuoto.
+  const NOMI_NERI = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const nomeNota = (p) => NOMI_NERI[p % 12] + (Math.floor(p / 12) - 1);
+  const tagNeri = await page.$$eval('.pk-black.pk-expected .pk-tag',
+    (ts) => ts.map((t) => t.textContent));
+  const neriChiesti = (piano.steps?.[0]?.pitch ?? []).filter((p) => [1, 3, 6, 8, 10].includes(p % 12));
+  check('il tasto nero chiesto porta scritto il suo nome, col nome giusto',
+    neriChiesti.every((p) => tagNeri.includes(nomeNota(p))),
+    `neri chiesti=[${neriChiesti.map(nomeNota)}] tag=[${tagNeri}]`);
+
   // Il do centrale marcato e i punti di riferimento scritti: senza quelli la tastiera
   // e' un disegno astratto, e chi suona deve poter capire DOVE sta il tasto acceso.
   const etichette = await page.$$eval('.pk-label', (es) => es.map((e) => e.textContent));

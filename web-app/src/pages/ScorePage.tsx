@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
@@ -670,34 +670,14 @@ const ScorePage: React.FC = () => {
     dynamicsOn: practice.dynamicsOn,
   });
 
-  /**
-   * L'estensione su cui disegnare la tastiera di richiamo.
-   *
-   * Non e' una tastiera fissa da 88 tasti: su uno schermo da tredici pollici
-   * ottantotto tasti vogliono dire sei pixel l'uno, e un disegno dove non si
-   * distingue un tasto bianco da uno nero non risponde piu' alla domanda "quale
-   * tasto?". L'estensione la prende dai passi che il servizio ha dichiarati — li'
-   * ci sono i pitch che il brano chiede davvero, comprese le note dell'altro rigo
-   * che restano nel disegno come contesto viola — e la chiude sui do perche' e' li'
-   * che si leggono le etichette dei punti di riferimento.
-   */
-  const tastiera = useMemo(() => {
-    const pitches = practice.steps.flatMap((s) => [...s.pitch, ...(s.offhand ?? [])]);
-    if (pitches.length === 0) return { low: 48, high: 84 };
-    const min = Math.max(...pitches);
-    const max = Math.min(...pitches);
-    let low = Math.max(21, Math.floor(Math.min(...pitches) / 12) * 12);
-    let high = Math.min(108, Math.ceil(max / 12) * 12);
-    // Oltre cinque ottave i tasti diventano strisce: se il brano e' piu' largo, la
-    // finestra si centra sull'estensione invece di allungarsi ancora.
-    if (high - low > 60) {
-      const centro = Math.round((min + max) / 24) * 12;
-      low = Math.max(21, centro - 30);
-      high = Math.min(108, low + 60);
-    }
-    return { low, high };
-  }, [practice.steps]);
-
+  // La tastiera si disegna per com'e' lo strumento, non per quanto e' largo il
+  // brano: tutti e 88 i tasti (A0-C8), voluti dall'utente. Qui prima c'era una
+  // finestra calcolata sui passi, e aveva un bug che vale la pena raccontare perche'
+  // il tipo non lo vedeva: `min` teneva il massimo e `max` il minimo, cosi' l'altezza
+  // della finestra veniva chiusa sul pitch PIU' BASSO del brano. Sul brano di prova
+  // (46..93) usciva una tastiera di un'ottava sola, e il secondo tasto del passo —
+  // l'A5 — non era nemmeno disegnato. Il compilatore non dice niente perche' i conti
+  // erano legibili; quello che mancava era la prova visiva, che qui non puo' girare.
   const passoCorrente = practice.steps[practice.index];
 
   if (error) {
@@ -736,8 +716,6 @@ const ScorePage: React.FC = () => {
           sarebbe un disegno che mente. */}
       {isPractice && keyboardOpen && passoCorrente && (
         <PianoKeyboard
-          low={tastiera.low}
-          high={tastiera.high}
           expected={passoCorrente.pitch}
           pressed={practice.status?.pressed ?? []}
           extra={practice.status?.extra ?? []}
