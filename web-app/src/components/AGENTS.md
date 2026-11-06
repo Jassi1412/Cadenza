@@ -46,7 +46,7 @@ Stateless and lightly-stateful UI components reused across pages. Each component
 
 - `npm run lint` — ESLint with React Hooks + React Refresh plugins
 - `npm run build` — TypeScript type-check + Vite build
-- `node ../alignment/_probe_browser.mjs` (dev server on 5173, service on 8080) — asserts in a real browser what these three components must not do: both bars compute an alpha of 1, the strip stays under 70 px and above the pill with the keyboard above the strip, the keyboard draws exactly **52 white + 36 black keys from pitch 21 to 108**, every pitch the first step asks or declares is actually drawn (this check exists because a windowed first version silently omitted A5 — swapped `min`/`max` variables, invisible to `tsc`), an asked black key carries its correct `pk-tag`, the keys it lights are the ones the plan asked for, **D** costs no request, and leaving practice takes the keyboard away
+- `node ../alignment/_probe_browser.mjs` (dev server on 5173 + a Cadenza service; origin must match between `VITE_CADENZA_API` and `PROBE_API`, see `../pages/AGENTS.md`) — asserts in a real browser what these three components must not do: both bars compute an alpha of 1, the strip stays under 70 px and above the pill with the keyboard above the strip, the keyboard draws exactly **52 white + 36 black keys from pitch 21 to 108**, every pitch the first step asks or declares is actually drawn (this check exists because a windowed first version silently omitted A5 — swapped `min`/`max` variables, invisible to `tsc`), an asked black key carries its correct `pk-tag`, the keys it lights are the ones the plan asked for, **D** costs no request, and leaving practice takes the keyboard away
 
 ## Child DOX Index
 

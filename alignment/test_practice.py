@@ -46,7 +46,9 @@ def judge(events):
     out = {}
     for line in proc.stdout.decode().splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[0] in PRACTICE_RULES:
+        # Su una riga violata possono seguire gli indici degli eventi (batch.pl):
+        # questo test vuole solo il si/no, gli indici se li guarda la pagina.
+        if len(parts) >= 2 and parts[0] in PRACTICE_RULES:
             out[parts[0]] = "ok" if parts[1] == "0" else "VIOLATA"
     return out, proc.stderr.decode().strip()
 

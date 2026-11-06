@@ -31,6 +31,12 @@ import path from 'node:path';
 const ROOT = 'C:/Users/Power/Desktop/cadenza';
 const SCORE = path.join(ROOT, 'The Legend of Zelda_ Great Fairy Fountain (Piano Cover).musicxml');
 const APP = 'http://[::1]:5173';
+// La pagina chiama il servizio all'indirizzo che trova in VITE_CADENZA_API (default
+// la porta 8080 di .env.local), e il filtro che conta le richieste deve guardare la
+// STESSA origine: su questa macchina la 8080 può essere occupata da un'altra app,
+// quindi l'origine si prende dall'ambiente PROBE_API, con lo stesso default di prima.
+const API = process.env.PROBE_API || 'http://127.0.0.1:8080';
+const API_PORT = new URL(API).port;
 const SHOTS = path.join(ROOT, 'alignment', 'scratch', 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -110,12 +116,12 @@ page.on('pageerror', (e) => log.push(`[pageerror] ${e.message}`));
 const richieste = [];
 page.on('request', (r) => {
   const u = r.url();
-  if (!u.includes(':8080/')) return;
+  if (!u.includes(':' + API_PORT + '/')) return;
   // Serve la mano dichiarata nel corpo: il filtro per mano e' un esercizio
   // diverso, e una richiesta che non porta la mano verrebbe giudicata su quello
   // sbagliato, in silenzio.
   const mano = (r.postData() ?? '').match(/"hand":"(right|left|both)"/);
-  richieste.push(`${r.method()} ${u.replace('http://127.0.0.1:8080', '')}${mano ? ' ' + mano[0] : ''}`);
+  richieste.push(`${r.method()} ${u.replace(API, '')}${mano ? ' ' + mano[0] : ''}`);
 });
 
 /** Le richieste di un tipo, per contare quelle nuove fra due momenti. */
@@ -143,7 +149,9 @@ try {
   await paginaBloccata.waitForSelector('.practice-notice', { timeout: 15000 });
   const avviso = (await paginaBloccata.textContent('.practice-notice')) ?? '';
   check('senza permesso MIDI l\'avviso dice cosa aspettava',
-    /permesso/i.test(avviso), avviso.trim().replace(/\s+/g, ' ').slice(0, 90));
+    // L'avviso ora è in inglese (passata "tutto in inglese", 2026-11-04): si ancora
+    // alla promessa stabile — la pagina deve dire CHE COSA sta aspettando.
+    /allow the midi|prompt may already/i.test(avviso), avviso.trim().replace(/\s+/g, ' ').slice(0, 90));
 } catch {
   check('senza permesso MIDI l\'avviso dice cosa aspettava', false,
     'nessun avviso dopo 15 s: l\'attesa e\' muta');
@@ -532,5 +540,13 @@ try {
 const falliti = esiti.filter((e) => !e.ok);
 console.log('\n' + '='.repeat(60));
 console.log(`${esiti.length - falliti.length}/${esiti.length} controlli superati`);
+// L'elenco dei falliti viene riscritto QUI, dopo il riepilogo: quando l'output passa
+// da un pipe (Tee, Select-String) le ultime righe del flusso possono perdersi
+// nell'interlacciamento stdout/stderr, e così un controllo fallito sparisce dal log
+// pur essendo nel conteggio — successo due volte su questa macchina. Il file JSON è
+// la fonte d'autorità: tutti i controlli, uno per uno, con l'esito.
+for (const f of falliti) console.log(`FALLITO (elenco finale): ${f.nome}`);
+fs.writeFileSync(path.join(ROOT, 'alignment', '_probe_traces', 'browser-esiti.json'),
+  JSON.stringify(esiti, null, 1));
 console.log('='.repeat(60));
 process.exit(falliti.length ? 1 : 0);

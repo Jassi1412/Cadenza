@@ -205,6 +205,13 @@ def _run_metrics(trace_path, metrics):
     `user` e una seconda specifica nella stessa VM fallisce al caricamento.
     batch.pl se ne occupa e scrive "<nome> <exit>" per riga.
     exit 0 = traccia conforme, 1 = violata, 2 = errore.
+
+    Su una riga violata seguono gli indici 0-based degli eventi su cui la macchina
+    RML si e' fermata: "<nome> 1 7 19 40". Sono i punti del brano in cui l'allievo
+    ha sbagliato, e servono alla pagina per colorare di rosso LA nota, non una a
+    caso. Il codice d'uscita continua a venire dalla passata intera: gli indici
+    sono un'aggiunta sopra lo stesso verdetto, mai una sua ricalcolazione, e
+    infatti la modalita' pratica li ignora senza accorgersene.
     """
     specs = []
     for name in metrics:
@@ -216,10 +223,13 @@ def _run_metrics(trace_path, metrics):
     verdicts = {}
     for line in proc.stdout.decode().splitlines():
         parts = line.split()
-        if len(parts) != 2 or parts[0] not in metrics:
+        if len(parts) < 2 or parts[0] not in metrics:
             continue
-        name, code = parts
-        verdicts[name] = (code == "0", int(code), "")
+        name, code = parts[0], parts[1]
+        # gli indici viaggiano solo sulle righe violate; un token sporco non deve
+        # far esplodere la riga, e' l'unica cosa che sappiamo del punto
+        ids = [int(x) for x in parts[2:] if x.lstrip("-").isdigit()]
+        verdicts[name] = (code == "0", int(code), "", tuple(ids))
     # Le regole di cui non si e' letta nemmeno una riga.
     #
     # exit 2 NON e' una violazione: e' il monitor che non e' partito (swipl
@@ -230,8 +240,38 @@ def _run_metrics(trace_path, metrics):
     # codice, vedi useVerdict.
     for name in metrics:
         if name not in verdicts:
-            verdicts[name] = (False, 2, proc.stderr.decode()[-400:])
+            verdicts[name] = (False, 2, proc.stderr.decode()[-400:], ())
     return verdicts
+
+
+def _locations(ids, events):
+    """Gli indici di batch.pl tradotti nei punti dello spartito.
+
+    Un indice e' una riga della traccia, e ogni riga porta gia' dentro di se' il
+    punto che riguarda: la battuta, la misura e il `chordId`, cioe' l'INDICE
+    ASSOLUTO dell'attacco nello spartito completo. E' lo stesso numero che il
+    piano di pratica chiama `attack` e che il cursore di OSMD sa raggiungere contando
+    (128 fermate su 128, misurato in alignment/_probe_osmd.mjs): la pagina arriva
+    alla nota giusta contando, come fa il cursore, perche' l'altezza del suono
+    non e' un ponte affidabile fra i due mondi (octave-shift, sempre li').
+    Qui si legge soltanto: niente calcoli, niente soglie.
+    """
+    locs, seen = [], set()
+    for i in ids:
+        if not 0 <= i < len(events):
+            continue
+        pos = events[i].get("position") or {}
+        measure, beat = pos.get("measure"), pos.get("beat")
+        if measure is None or beat is None:
+            continue
+        attack = (events[i].get("expected") or {}).get("chordId")
+        key = (measure, beat)
+        if key in seen:
+            continue
+        seen.add(key)
+        locs.append({"measure": measure, "beat": beat,
+                     "attack": attack if isinstance(attack, int) else None})
+    return locs
 
 
 
@@ -447,9 +487,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, practise_step(body))
 
             verdicts, events = analyse(body)
+            # Su una regola violata viaggiano anche i punti dello spartito: la
+            # pagina ci colora di rosso le note e il mouse sopra racconta quali
+            # regole sono cascate li'. exit 2 NON produce posizioni: il servizio
+            # non ha giudicato niente, e una nota rossa sarebbe un'accusa inventata.
+            payload = {}
+            for k, v in verdicts.items():
+                entry = {"ok": v[0], "exit": v[1]}
+                if v[1] == 1:
+                    entry["locations"] = _locations(v[3], events)
+                payload[k] = entry
             self._send(200, {
                 "events": len(events),
-                "verdicts": {k: {"ok": v[0], "exit": v[1]} for k, v in verdicts.items()},
+                "verdicts": payload,
                 "stderr": {k: v[2] for k, v in verdicts.items() if v[2].strip()},
             })
         except Exception as e:

@@ -5,6 +5,8 @@ import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { pressedPitches, stepProblem } from '../hooks/practiceSteps';
+import { planMarks, hoverLabel, summaryLines } from '../hooks/scoreMarks';
+import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
 import PianoKeyboard from '../components/PianoKeyboard';
@@ -148,6 +150,192 @@ function moveCursorToStep(osmd: any, stepIndex: number, fromStep: number): numbe
     }
     return -1;
   }
+}
+
+/**
+ * Il rosso delle dite sbagliate: la famiglia d'errore già usata dalla barra di
+ * pratica e dalla tastiera di richiamo. In tutta l'app una sola parola, "sbagliato",
+ * ha una tinta sola: qui non si inventa niente.
+ */
+const MARK_RED = '#a0442c';
+
+/** Ciò che è stato colorato, per toglierlo quando il verdetto si chiude o la
+ *  prova ricomincia: un rosso lasciato addosso alla nota sbagliata GIUSTA
+ *  diventerebbe l'accusa di una prova che non è quella in corso. */
+interface MarkState {
+  paths: Array<{ el: SVGPathElement; fill: string | null; stroke: string | null }>;
+  titles: SVGTitleElement[];
+}
+
+function clearScoreMarks(state: MarkState | null): void {
+  if (!state) return;
+  for (const { el, fill, stroke } of state.paths) {
+    if (fill === null) el.removeAttribute('fill');
+    else el.setAttribute('fill', fill);
+    if (stroke === null) el.removeAttribute('stroke');
+    else el.setAttribute('stroke', stroke);
+  }
+  for (const t of state.titles) t.remove();
+}
+
+/** Una testa di nota, la sua x e il suo gruppo: la geometria è l'unico ponte
+ *  verso il modello — nella build minificata di OSMD le teste NON espongono
+ *  alcun riferimento all'elemento SVG (misurato con una sonda su Chromium). */
+interface NoteheadHit {
+  el: SVGGElement;
+  cx: number;
+}
+
+/** Tinge di rosso una testa di nota e le appende il tooltip nativo del browser
+ *  (un `<title>` dentro un gruppo SVG viene mostrato all'hover, misurato): sono
+ *  solo i nomi delle regole cascate lì, come richiesto, niente altro. */
+function paintNotehead(head: SVGGElement, label: string, state: MarkState): void {
+  for (const p of head.querySelectorAll<SVGPathElement>('path')) {
+    state.paths.push({ el: p, fill: p.getAttribute('fill'), stroke: p.getAttribute('stroke') });
+    p.setAttribute('fill', MARK_RED);
+    p.setAttribute('stroke', MARK_RED);
+  }
+  const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+  title.textContent = label;
+  head.insertBefore(title, head.firstChild);
+  state.titles.push(title);
+}
+
+/**
+ * Dipingere di rosso i punti in cui il verdetto ha colto l'esecuzione in fallo,
+ * e attaccarci sopra il tooltip con i nomi delle regole cascate lì.
+ *
+ * COME ARRIVA ALLA NOTA — contando. Ogni punto arriva dal servizio con `attack`:
+ * l'indice assoluto dell'attacco nello spartito completo, ed è ciò che il
+ * cursore di OSMD sa raggiungere contando (moveCursorToStep qua sopra: misurato
+ * 128 fermate su 128 sulla misura giusta). Riconoscere la nota dall'altezza
+ * sbagliherebbe ovunque: OSMD disegna tutto tre ottave sotto il piano, e i due
+ * lati non combinano mai (alignment/_probe_osmd.mjs). Il pitch qui non si legge.
+ *
+ * Una volta su quella fermata, quali teste dipingere? La riga del cursore dice
+ * DOVE, e a quel punto la scelta è geometrica: sono tutte le teste di nota il
+ * cui centro cade sulla perpendicolare della riga, dentro una banda di mezze
+ * colonne — cioè l'accordo (e l'eventuale rigo sotto) che parte in quell'istante.
+ * La soglia NON è un numero assoluto: la larghezza delle colonne dipende dallo
+ * zoom, quindi si misura lo spazio fra colonne vicine e si accetta chi ci sta
+ * dentro. Se nulla cade sulla riga si dichiara il punto "non raggiunto": meglio
+ * una riga sotto che dire "è colpa tua" alla nota del vicino.
+ */
+function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
+  state: MarkState;
+  painted: number;
+  firstEl: SVGGElement | null;
+  missed: string[];
+} {
+  const state: MarkState = { paths: [], titles: [] };
+  const missed: string[] = [];
+  let firstEl: SVGGElement | null = null;
+  let painted = 0;
+
+  // Senza indice dell'attacco non c'è da contare: questi punti finiscono dichiarati,
+  // non colorati a caso sul primo che passa.
+  const walk: Array<{ col: MarkColumn; attack: number }> = [];
+  for (const c of columns) {
+    if (c.attack === null || c.attack < 0) missed.push(...c.rules);
+    else walk.push({ col: c, attack: c.attack });
+  }
+  // Il cammino procede solo in avanti (il cursore non torna indietro), quindi si
+  // visita in ordine cronologico. L'ordine di lettura resta quello del piano.
+  walk.sort((x, y) => x.attack - y.attack);
+
+  if (!osmd?.cursors?.[0] || !walk.length) {
+    return { state, painted, firstEl, missed };
+  }
+
+  let pos = -1;
+  for (const { col, attack } of walk) {
+    pos = moveCursorToStep(osmd, attack, pos);
+    if (pos < attack) {
+      // la fermata non c'è (brano più corto del previsto, o iteratore rotto)
+      missed.push(...col.rules);
+      continue;
+    }
+    // moveCursorToStep ha già reso il cursore visibile su questo punto: la sua
+    // immagine è l'unica cosa che sa dove IL SISTEMA in corso sta sullo schermo.
+    const img = Array.from(document.querySelectorAll<HTMLElement>('[id^="cursorImg-"]'))
+      .find((el) => el.style.display !== 'none');
+    if (!img) {
+      missed.push(...col.rules);
+      continue;
+    }
+    const ir = img.getBoundingClientRect();
+    let bandTop = ir.top;
+    let bandBottom = ir.bottom;
+    if (bandBottom - bandTop < 10) {
+      // una linea troppo corta per distinguere i righi: allarga con giudizio,
+      // restando dentro il sistema che il cursore sta indicando
+      bandTop -= 80;
+      bandBottom += 80;
+    }
+    const cursorX = ir.left + ir.width / 2;
+
+    const heads: NoteheadHit[] = [];
+    for (const h of document.querySelectorAll<SVGGElement>('#sheet-container g.vf-notehead')) {
+      const r = h.getBoundingClientRect();
+      if (r.width === 0) continue;
+      const cy = (r.top + r.bottom) / 2;
+      if (cy < bandTop - 4 || cy > bandBottom + 4) continue;
+      heads.push({ el: h, cx: r.left + r.width / 2 });
+    }
+    if (!heads.length) {
+      missed.push(...col.rules);
+      continue;
+    }
+
+    // spazio fra colonne vicine: è lui la tolleranza, non un numero assoluto
+    const xs = [...new Set(heads.map((h) => Math.round(h.cx * 2) / 2))].sort((a, b) => a - b);
+    let gap = Infinity;
+    for (let i = 1; i < xs.length; i++) {
+      const d = xs[i] - xs[i - 1];
+      if (d > 3 && d < gap) gap = d;
+    }
+    if (!Number.isFinite(gap)) gap = 90; // unica colonna in vista: margine largo
+    const accept = Math.min(gap * 0.55, 45);
+
+    let best: NoteheadHit | null = null;
+    let bestD = Infinity;
+    for (const h of heads) {
+      const d = Math.abs(h.cx - cursorX);
+      if (d < bestD) {
+        bestD = d;
+        best = h;
+      }
+    }
+    if (!best || bestD > accept) {
+      missed.push(...col.rules);
+      continue;
+    }
+
+    // l'accordo intero: tutte le teste alla stessa ascissa della scelta migliore
+    const cluster = Math.max(3, gap * 0.3);
+    let any = false;
+    for (const h of heads) {
+      if (Math.abs(h.cx - best.cx) > cluster) continue;
+      paintNotehead(h.el, hoverLabel(col), state);
+      any = true;
+    }
+    if (!any) {
+      missed.push(...col.rules);
+      continue;
+    }
+    painted++;
+    firstEl ??= best.el;
+  }
+
+  // Il cursore aveva finito di servire: fuori dal playback e fuori dalla pratica
+  // non deve indicare niente, come ricorda l'effetto che lo nasconde alla fine
+  // della pratica.
+  try {
+    osmd.cursors[0].hide();
+  } catch {
+    // istanza già distrutta: il foglio sta già sparendo
+  }
+  return { state, painted, firstEl, missed };
 }
 
 const ScorePage: React.FC = () => {
@@ -371,16 +559,48 @@ const ScorePage: React.FC = () => {
     }
   }, [isPractice]);
 
-  // Il verdetto arriva da solo, a fine brano, mentre l'attenzione è sullo
-  // spartito: senza questo il pannello si aprirebbe sotto la piega e sembrerebbe
-  // non essere arrivato. Lo scroll-margin-bottom in .verdict-panel gli impedisce
-  // di fermarsi sotto la barra dei comandi.
+  // Il verdetto non elenca più le regole:colora di rosso i punti dello spartito
+  // in cui l'esecuzione è caduta, e il mouse sopra una nota nomina ciò che non
+  // è stato rispettato lì. È quello che serviva davvero: un riquadro che dice
+  // "pitch-agreement violato" senza dire DOVE obbliga l'allievo a cercarsi
+  // l'errore da solo, nota per nota.
+  //
+  // Il cammino verso la nota conta — lo stesso primitivo della modalità pratica,
+  // misurato lì 128 fermate su 128 — perché le altezze fra i due lati non
+  // combinano mai (octave-shift; allineamento/_probe_osmd.mjs).
+  //
+  // I rossi si cancellano da soli: la dipendenza che riaccende l'effetto a ogni
+  // cambio di verdetto è anche quella che spazza la pennellata prima, quindi un
+  // "Play again" o un "Close" non lasciano accuse della prova precedente.
+  const marksRef = useRef<MarkState | null>(null);
+  const [markedSpots, setMarkedSpots] = useState(0);
+  const [missedRules, setMissedRules] = useState<string[]>([]);
+
+  // Il pannello che resta serve da riga di riepilogo: quando non c'è nessun
+  // rosso da mostrare (tutto pulito, o tutto non localizzabile) è l'unica cosa
+  // che parla, e va portato in vista come prima. scroll-margin-bottom in
+  // .verdict-panel gli impedisce di fermarsi sotto la barra dei comandi.
   const verdictPanelRef = useRef<HTMLElement>(null);
+
   useEffect(() => {
-    if (verdict.status === 'done') {
+    clearScoreMarks(marksRef.current);
+    marksRef.current = null;
+    setMarkedSpots(0);
+    setMissedRules([]);
+    if (verdict.status !== 'done' || !verdict.verdicts || isPractice) return;
+    const plan = planMarks(verdict.verdicts);
+    const out = paintScoreMarks(osmdRef.current, plan.columns);
+    marksRef.current = out.state;
+    setMarkedSpots(out.painted);
+    setMissedRules(out.missed);
+    if (out.firstEl) {
+      // il punto in cui andare a vedere per primo: un verdetto che dice dove è
+      // successo e ti lascia in cima alla pagina ti fa comunque cercare l'errore
+      out.firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
       verdictPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [verdict.status]);
+  }, [verdict.status, verdict.verdicts, isPractice]);
 
   // Re-enable MIDI from upload page state
   useEffect(() => {
@@ -817,16 +1037,23 @@ const ScorePage: React.FC = () => {
 
           {verdict.status === 'done' && verdict.verdicts && (
             <>
-              <p className="verdict-note">{verdict.noteCount} notes analysed</p>
-              <ul className="verdict-list">
-                {Object.entries(verdict.verdicts).map(([key, v]) => (
-                  <li key={key} className={v.ok ? 'verdict-ok' : 'verdict-bad'}>
-                    <span className="verdict-mark">{v.ok ? '✓' : '✗'}</span>
-                    <span className="verdict-name">{key}</span>
-                    <span className="verdict-detail">{v.ok ? 'passed' : 'violated'}</span>
-                  </li>
-                ))}
-              </ul>
+              {summaryLines(
+                planMarks(verdict.verdicts),
+                markedSpots,
+                missedRules,
+                verdict.noteCount,
+              ).map((line) => (
+                <p
+                  key={line}
+                  className={
+                    line.startsWith('violated without') || line.startsWith('not judged')
+                      ? 'verdict-note verdict-caveat'
+                      : 'verdict-note'
+                  }
+                >
+                  {line}
+                </p>
+              ))}
               <button className="btn btn-outline verdict-retry" onClick={() => void handlePlayAlong()}>
                 Play again
               </button>

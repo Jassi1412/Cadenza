@@ -28,7 +28,26 @@
 %%
 %% Uso: swipl -O -p monitor=<dir> batch.pl -- <traccia.jsonl> <nome1> <spec1.pl> [<nome2> <spec2.pl> ...]
 %% Una riga per specifica: "<nome> <exit>", dove 0 = conforme, 1 = violata,
-%% 2 = errore.
+%% 2 = errore. Quando una regola risulta violata la riga continua con gli indici
+%% (0-based, lo stesso ordine della traccia) degli eventi su cui la macchina si
+%% e' fermata: "<nome> 1 7 19 40". Sono il punto in cui l'allievo ha sbagliato,
+%% e servono alla pagina per colorare di rosso LA nota giusta invece di dire
+%% solo "una di queste sette regole e' saltata". Il codice di uscita continua a
+%% venire dalla passata intera, identica a prima: gli indici sono un'aggiunta,
+%% non un ripensamento del verdetto.
+%%
+%% Perche' servono piu' passaggi, e perche' il primo non basta: la macchina di
+%% RML si ferma alla prima nota che non riesce a leggere (monitor.pl riga 115
+%% stampa "unmatched event #Id" esattamente prima di arrendersi). Per colorare
+%% TUTTI gli errori bisogna ripartire con l'espressione iniziale dalla riga
+%% successiva a quella incriminata e cercare il prossimo arresto. Ogni ripartenza
+%% salta via gli eventi che non interessano alla regola, perche' la semantica di
+%% next/3 lascia passare quelli che non c'entrano niente, quindi la seconda
+%% caccia non inventa violazioni che la prima non aveva visto: al piu' ne trova
+%% oltre, e comunque solo su regole gia' giudicate violate. Il costo e' una
+%% passata per errore trovato, su tracce di qualche centinaia di eventi: si ferma
+%% a 40 indici per regola, perche' colorare quattrocento note non aiuta nessuno
+%% e il tempo su un'istanza da mezza CPU non e' un dettaglio.
 
 :- use_module(library(http/json)).
 :- use_module(monitor(trace_expressions_semantics)).
@@ -57,13 +76,65 @@ open_trace(TraceFile, Stream) :-
 %% Una specifica: carica, prendi l'espressione, verifica, riporta, scarica.
 run_one(Name, SpecFile, Stream) :-
     seek(Stream, 0, bof, _),
-    (   catch(( load_spec(SpecFile, TraceExp), verify(Stream, TraceExp) -> Exit = 0 ; Exit = 1 ),
-              Error, ( print_message(error, Error), Exit = 2 ))
+    (   catch(( load_spec(SpecFile, TraceExp),
+                (   verify(Stream, TraceExp)
+                ->  Exit = 0, Ids = []
+                ;   Exit = 1, collect_ids(Stream, TraceExp, Ids) )),
+              Error, ( print_message(error, Error), Exit = 2, Ids = [] ))
     ->  true
-    ;   Exit = 2
+    ;   Exit = 2, Ids = []
     ),
     unload_spec(SpecFile),
-    format("~w ~w~n", [Name, Exit]).
+    format("~w ~w", [Name, Exit]),
+    forall(member(I, Ids), (write(' '), write(I))),
+    nl.
+
+%% -------------------------------------------------- i punti della violazione
+
+%% Tetto di indici per regola. Non e' pigrizia: una traccia senza pedale per
+%% tutto il brano si ferma una volta per attacco, e colorare trecento note non
+%% dice all'allievo niente di piu' delle prime quaranta. Ferma qui la caccia,
+%% non il verdetto, che arriva dalla passata intera.
+max_ids(40).
+
+collect_ids(Stream, ExpInit, Ids) :-
+    collect_ids(Stream, ExpInit, 0, [], Rev),
+    reverse(Rev, Ids).
+
+collect_ids(Stream, ExpInit, Skip, Acc, Rev) :-
+    length(Acc, N),
+    max_ids(Max),
+    (   N >= Max
+    ->  Rev = Acc
+    ;   catch(run_from(Stream, ExpInit, Skip, Outcome), _Error, Outcome = end_of_trace),
+        (   Outcome = stuck(Line)
+        ->  Acc2 = [Line|Acc], NextSkip is Line + 1,
+            collect_ids(Stream, ExpInit, NextSkip, Acc2, Rev)
+        ;   Rev = Acc
+        )
+    ).
+
+%% Avanza la macchina saltando i primi Skip eventi della traccia e riporta dove
+%% si e' fermata: conform se da li' in fondo va tutto bene, end_of_trace se la
+%% traccia finisce mentre un evento era ancora atteso (e' una regola che vuole
+%% qualcosa in coda: non ha una nota precisa da incolpare), stuck(Line) con Line
+%% indice 0-based dell'evento che la macchina non e' riuscita a leggere.
+run_from(Stream, ExpInit, Skip, Outcome) :-
+    seek(Stream, 0, bof, _),
+    feed(Stream, ExpInit, 0, Skip, Outcome).
+
+feed(Stream, Exp, Line, Skip, Outcome) :-
+    json_read_dict(Stream, Event, [end_of_file(@(eof))]),
+    (   Event == @(eof)
+    ->  (   may_halt(Exp) -> Outcome = conform
+        ;   Outcome = end_of_trace )
+    ;   Line < Skip
+    ->  NextLine is Line + 1, feed(Stream, Exp, NextLine, Skip, Outcome)
+    ;   (   next(Exp, Event, NewExp)
+        ->  NextLine is Line + 1, feed(Stream, NewExp, NextLine, Skip, Outcome)
+        ;   Outcome = stuck(Line)
+        )
+    ).
 
 load_spec(SpecFile, TraceExp) :-
     use_module(SpecFile),

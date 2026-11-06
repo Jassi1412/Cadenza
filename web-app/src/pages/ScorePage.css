@@ -55,8 +55,14 @@
 }
 
 /* ── Verdicts ─────────────────────────────────────────── */
-/* I sette verdetti arrivano gia' calcolati dal servizio RML. Qui non c'e'
-   nessuna soglia: si mostra solo quello che Prolog ha risposto. */
+/* I verdetti arrivano gia' calcolati dal servizio RML: qui non c'e' nessuna
+   soglia, si mostra solo quello che Prolog ha risposto. A fine prova il
+   ScorePage NON elenca piu' le sette regole: colora di rosso le note sbagliate
+   dentro lo spartito (vedi paintScoreMarks in ScorePage.tsx) e questo pannello
+   porta solo le righe che LO SPARTITO non puo' dire — i punti rossi sono, e le
+   cose senza una nota da indicare. Lo stile a elenco con ✓/✗ resta qui perche'
+   la pagina dimostrativa /zelda non ha uno spartito giudicato dal vivo e lo
+   usa ancora: non e' il flusso reale, e non va riportato indietro qui. */
 
 .verdict-panel {
   margin: 2rem auto;
@@ -81,6 +87,13 @@
 .verdict-note { color: #6b6b6b; font-size: 0.9rem; margin: 0.25rem 0 1rem; }
 .verdict-error { color: #b3261e; }
 
+/* Le clausole che accompagnano i punti rossi: violazioni senza una nota da
+   indicare, o regole che il monitor non ha proprio iniziato a giudicare. Hanno
+   un colore loro perche' NON sono la localita' dell'errore (quella e' il rosso
+   sullo spartito) e non vanno lette come se lo fossero. */
+.verdict-caveat { color: #8a5a2b; }
+
+/* ── Stile a elenco, solo per la pagina dimostrativa /zelda ── */
 .verdict-list {
   list-style: none;
   margin: 0;

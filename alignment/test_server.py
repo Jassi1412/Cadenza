@@ -298,6 +298,57 @@ try:
         ok = sum(1 for v in res["verdicts"].values() if v["ok"])
         print("  %d/%d conformi in %.0f ms" % (ok, len(res["verdicts"]), ms))
         check("la modalita' normale da' 7 verdetti", len(res["verdicts"]) == 7)
+        # Le posizioni viaggiano solo sulle regole violate: una nota rossa dove
+        # il monitor non ha giudicato niente sarebbe un'accusa inventata.
+        check("le posizioni compaiono solo sulle regole violate",
+              all(("locations" in v) == (v["exit"] == 1)
+                  for v in res["verdicts"].values()))
+
+    # ---- le dita sporche: due note stonate devono essere INDICATE, non solo contate
+    #
+    # E' il cuore del verdetto nuovo: la pagina colora di rosso le note che il
+    # tooltip accusa, quindi il servizio deve puntare il punto giusto. Qui si
+    # sporcano due note precise e si pretende che la regola del pitch dica QUEL
+    # battuta e QUELLA battitura, calcolate dalla stessa mappa che usa join.py.
+    print("\n=== POST / : due note stonate, il verdetto deve sapere dove ===")
+    sporche = [dict(n) for n in notes]
+    sporche[5]["pitch"] += 3
+    sporche[40]["pitch"] -= 2
+    res2, ms, err = post("/", {"score": score_xml, "notes": sporche,
+                               "control_changes": [], "tempo_factor": 1.0})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la prova stonata risponde", False)
+    else:
+        pa = res2["verdicts"].get("pitch-agreement", {})
+        locs = pa.get("locations") or []
+        print("  pitch-agreement exit %s, %d posizioni in %.0f ms"
+              % (pa.get("exit"), len(locs), ms))
+        check("con due note stonate pitch-agreement e' violata", pa.get("exit") == 1)
+        check("la prova stonata produce posizioni", len(locs) > 0)
+
+        def attesa(i):
+            n = sporche[i]
+            b = model.snap_beat(model.beat_at(n["time_ms"]))
+            return (model.measure_at(b), round(b, 4))
+
+        volute = [attesa(5), attesa(40)]
+        date = {(l["measure"], l["beat"]) for l in locs}
+        for (vm, vb) in volute:
+            hit = any(m == vm and abs(bb - vb) < 1e-3 for (m, bb) in date)
+            check("la nota stonata alla battuta %s e' segnalata" % vm, hit,
+                  "atteso (%s, %s), ricevuto %s" % (vm, vb, sorted(date)[:8]))
+        check("ogni posizione ha misura e battitura",
+              all(isinstance(l.get("measure"), int) and isinstance(l.get("beat"), float)
+                  for l in locs))
+        check("nessuna regola e' in errore sulla prova stonata (exit 2)",
+              all(v["exit"] != 2 for v in res2["verdicts"].values()))
+
+    # ---- la traccia pulita non deve MAI colorare niente: se una regola e'
+    #      conforme la caccia agli indici non parte nemmeno, quindi niente
+    #      falsi allarmi su chi ha suonato bene.
+    if not err and res and not any(v["exit"] == 1 for v in res["verdicts"].values()):
+        check("sulla prova perfetta nessuna posizione", True)
 
 finally:
     proc.terminate()

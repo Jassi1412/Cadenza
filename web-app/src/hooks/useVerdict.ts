@@ -1,5 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
 import type { MidiEvent } from './useMidi';
+import type { ScoreLocation } from './scoreMarks';
+
+export type { ScoreLocation };
 
 /**
  * Trasforma il flusso MIDI in esecuzione da mandare al servizio, e ne legge i
@@ -40,6 +43,15 @@ export interface ControlChange {
 export interface Verdict {
   ok: boolean;
   exit: number;
+  /**
+   * I punti dello spartito che questa regola ha colto in fallo, presenti solo
+   * quando exit vale 1. Li produce il servizio (batch.pl dice QUALE evento ha
+   * fermato la macchina RML, server.py lo traduce in battuta e battitura): la
+   * pagina ci colora di rosso le note e il tooltip sopra porta i nomi delle
+   * regole. exit 2 non ha MAI posizioni: li' il servizio non ha giudicato nulla,
+   * e una nota rossa sarebbe un'accusa inventata. Vedi hooks/scoreMarks.ts.
+   */
+  locations?: ScoreLocation[];
 }
 
 export type VerdictMap = Record<string, Verdict>;
