@@ -202,17 +202,21 @@
   animation: badge-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Countdown overlay — copre lo spartito: il musicista guarda le mani, non la pagina. */
+/* Countdown overlay — sta sopra a QUELLO CHE SI VEDE, non al centro del
+   documento. Era absolute dentro .score-container, che e' alto quanto tutto
+   lo spartito: il numero finiva a meta' dei 250 m di brano e il velo copriva
+   ogni cosa. "fixed" lo planta sul viewport, a qualsiasi scroll si trovi la
+   pagina; trasparente lascia leggere le note sotto, e l'alone bianco intorno
+   ai caratteri fa il resto — senza quinte né sipari. */
 .countdown-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  background: rgba(252, 251, 248, 0.82);
-  backdrop-filter: blur(8px);
+  background: transparent;
   /* Sopra la barra dei comandi (z-index 1000): durante il countdown i suoi
      pulsanti sono disabilitati, lasciarla davanti sarebbe solo rumore. */
   z-index: 1100;
@@ -225,20 +229,37 @@
 }
 
 /* `key={count}` su .countdown-value rimonta l'elemento a ogni numero, quindi
-   l'animazione riparte da capo invece di interpolare da 3 a 2. */
+   l'animazione riparte da capo invece di interpolare da 3 a 2.
+   La DURATA non è scritta qui: arriva dall'esterno (ScorePage.tsx la passa come
+   inline style dallo stesso COUNTDOWN_STEP_MS che genera i click), così il
+   disegno e il metronomo non possono divergere.
+   L'animazione deve durare quanto WHOLE il numero e non deve mai fermarsi:
+   la versione vecchia finiva a 0,75 s su una finestra da 1 s, e con `both` il
+   numero restava SEMI-TRASPARENTE E CONGELATO per l'ultimo quarto — "appare, si
+   freeza, poi arriva il successivo" — dandogli la fluidità di un lampeggio. */
 .countdown-value {
   font-family: var(--font-heading);
   font-size: clamp(5rem, 18vw, 11rem);
   font-weight: 600;
   line-height: 1;
   color: var(--accent-secondary);
-  animation: countdown-pop 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+  /* L'alone e' l'unico mezzo per restare leggibili senza coprire: le note
+     passano sotto, il numero deve poter stare sopra le teste nere dei righi. */
+  text-shadow:
+    0 0 8px rgba(255, 253, 250, 0.95),
+    0 0 28px rgba(255, 253, 250, 0.9),
+    0 0 70px rgba(255, 253, 250, 0.75);
+  /* linear e keyframe fitti: il movimento non si ferma mai, ma il numero resta
+     leggibile (>= 0.9) per più di metà del suo secondo. Esce a 0.08 proprio
+     mentre il successivo entra da 0: lo scambio non si vede. */
+  animation: countdown-pop linear both;
 }
 
 @keyframes countdown-pop {
-  from { opacity: 0; transform: scale(1.6); }
-  60%  { opacity: 1; transform: scale(1); }
-  to   { opacity: 0.35; transform: scale(0.92); }
+  0%   { opacity: 0;    transform: scale(1.28); }
+  24%  { opacity: 1;    transform: scale(1.04); }
+  62%  { opacity: 0.95; transform: scale(1); }
+  100% { opacity: 0.08; transform: scale(0.9); }
 }
 
 .countdown-hint {
@@ -246,6 +267,9 @@
   font-size: 0.95rem;
   color: var(--text-secondary);
   letter-spacing: 0.03em;
+  text-shadow:
+    0 0 6px rgba(255, 253, 250, 0.95),
+    0 0 16px rgba(255, 253, 250, 0.8);
 }
 
 @keyframes badge-pop {

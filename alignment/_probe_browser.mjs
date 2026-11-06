@@ -350,7 +350,13 @@ try {
 
   // ── 6. suonare il primo passo ──────────────────────────────────
   console.log('\n5. Suono il primo passo');
-  for (const p of attesi0) await page.evaluate((n) => window.__press(n), p);
+  // Pressione SIMULTANEA in un solo evaluate: due `page.evaluate` separati
+  // superano i 120 ms di rilascio su una macchina carica, il primo tasto si
+  // spegne prima che arrivi il secondo e `.pk-down >= 2` non si verifica MAI
+  // (misurato il 2026-11-06 con RAM libera a 0,2 GB: moriva qui, due volte).
+  // Il mezzo secondo di tenuta garantisce la finestra di contemporaneità senza
+  // spostare lordine dei rilasci rispetto al verdetto.
+  await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, attesi0);
   await page.waitForFunction(() => document.querySelectorAll('.pk-down').length >= 2,
     null, { timeout: 15000 });
   check('i tasti chiesti diventano verdi nell\'istante in cui sono premuti',
@@ -444,7 +450,7 @@ try {
   // Si preme SOLO la nota dell'altro rigo. Non deve far avanzare, non deve essere
   // letta come errore, e deve essere dichiarata: e' il caso che il servizio misura
   // in test_practice.py (casi 11-12); qui si guarda che lo racconti la tastiera.
-  for (const p of esclusoSx) await page.evaluate((n) => window.__press(n), p);
+  await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, esclusoSx);
   await page.waitForTimeout(1500);
   const violaSx = await page.$$eval('.pk-offhand',
     (ks) => ks.map((k) => Number(k.dataset.pitch)));
@@ -465,7 +471,7 @@ try {
   // deve portare la stessa mano su cui il piano e' stato costruito.
   const rispostaPasso = page.waitForResponse(
     (r) => r.url().includes('/practice/step'), { timeout: 25000 });
-  for (const p of chiestoSx) await page.evaluate((n) => window.__press(n), p);
+  await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, chiestoSx);
   await rispostaPasso;
   check('la richiesta di verdetto dichiara la mano sinistra',
     richieste.some((r) => r.startsWith('POST /practice/step') && r.includes('"hand":"left"')),
@@ -498,7 +504,7 @@ try {
     attesiTutte.length === 2, JSON.stringify(attesiTutte));
 
   const cursorePrima = await page.evaluate(CURSORE);
-  await page.evaluate(() => window.__press(61));
+  await page.evaluate(() => window.__press(61, 80, 900));
   await page.waitForTimeout(1500);
   check('il tasto premuto fuori dallo spartito si accende di rosso',
     await page.locator('.pk-extra[data-pitch="61"]').count() === 1);

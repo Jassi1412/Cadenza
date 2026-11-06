@@ -81,8 +81,43 @@ const END_SLACK_MS = 2;
  */
 const STALL_MS = 2000;
 
-/** Silenzio fra un numero e l'altro del countdown, in ms. */
-const COUNTDOWN_STEP_MS = 750;
+/**
+ * Il countdown fa DA 4 A 1, un secondo per numero (chiarimento dell'utente del
+ * 2026-11-06: "intendevo un countdown da 4 a 1, ogni numero vale 1 secondo").
+ * Quattro numeri veri alla stessa distanza di un battito da 60: come la battuta
+ * d'attacco di un direttore. Il click accentato sul "Go" coincide con l'attacco
+ * del brano (secondo il chiarimento, e secondo la musica).
+ */
+const COUNTDOWN_STEP_MS = 1000;
+
+/** Da quale numero si comincia: 4, come una ripresa vera. */
+const COUNTDOWN_FROM = 4;
+
+/**
+ * Un click di metronomo, generato al volo con WebAudio: nessun file, nessun player.
+ * Il fischio acuto e corto è il battito forte dell'ultimo numero ("Go"): come
+ * un metronomo vero, l'attacco del brano cade sul colpo accentato.
+ */
+let audioCtx: AudioContext | null = null;
+function playTick(accent: boolean) {
+  try {
+    audioCtx ??= new AudioContext();
+    if (audioCtx.state === 'suspended') void audioCtx.resume();
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = accent ? 1560 : 1040;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.32, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  } catch {
+    // niente audio su questo browser: i numeri bastano comunque a contare
+  }
+}
 
 /**
  * Porta il cursore di OSMD sul passo indicato, e dice dove e' arrivato.
@@ -637,15 +672,27 @@ const ScorePage: React.FC = () => {
     player.rewind();
     midi.clearRecording();
     setProgress(0);
-    setCount(3);
+    setCount(COUNTDOWN_FROM);
     setPhase('countdown');
+    // Il click sul "3" si sente subito: qui c'è ancora il gesto utente che
+    // autorizza l'audio, dopo sarà troppo tardi per lo sblocco del contesto.
+    playTick(false);
   }, [isLoading, midi]);
 
-  /** Il countdown tiene premuto il musicista al tastierino, poi parte tutto. */
+  /**
+   * Il countdown tiene premuto il musicista al tastierino, poi parte tutto.
+   * I click si suonano nel callback del timer, non nel corpo dell'effetto:
+   * in dev StrictMode l'effetto viene montato due volte e dal corpo partirebbero
+   * doppi flam; dal callback, che il cleanup disarma insieme al timer, uno solo.
+   */
   useEffect(() => {
     if (phase !== 'countdown') return;
     if (count > 0) {
-      const timer = setTimeout(() => setCount((c) => c - 1), COUNTDOWN_STEP_MS);
+      const timer = setTimeout(() => {
+        const next = count - 1;
+        playTick(next === 0);
+        setCount(next);
+      }, COUNTDOWN_STEP_MS);
       return () => clearTimeout(timer);
     }
     playerRef.current?.play();
@@ -1015,7 +1062,13 @@ const ScorePage: React.FC = () => {
             guardando le mani, non la pagina. */}
         {phase === 'countdown' && (
           <div className="countdown-overlay">
-            <div className="countdown-value" key={count}>{count > 0 ? count : 'Go'}</div>
+            {/* La durata del disegno arriva dallo stesso COUNTDOWN_STEP_MS che
+                batte i click: l'animazione occupa tutto il secondo del numero e
+                non può mai restare congelata a metà (vedi ScorePage.css). */}
+            <div className="countdown-value" key={count}
+                 style={{ animationDuration: `${COUNTDOWN_STEP_MS}ms` }}>
+              {count > 0 ? count : 'Go'}
+            </div>
             <p className="countdown-hint">Get ready, starting shortly</p>
           </div>
         )}
