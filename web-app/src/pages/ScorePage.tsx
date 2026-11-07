@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
-import { pressedPitches, stepProblem } from '../hooks/practiceSteps';
+import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
 import { planMarks, hoverLabel, summaryLines } from '../hooks/scoreMarks';
 import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
@@ -433,6 +433,14 @@ const ScorePage: React.FC = () => {
    */
   const [preparing, setPreparing] = useState<'midi' | 'piano' | null>(null);
 
+  // L e R sono diventati due interruttori indipendenti (richiesta esplicita
+  // 2026-11-07): la lettera accesa partecipa, quella spenta no, e "tutte e due
+  // le mani" significa premerle entrambe. Il piano da mandare al servizio lo
+  // decide `handSelection` nel modulo puro; qui sta solo lo stato dei due
+  // interruttori, acceso da entrambe le parti a ogni nuova sessione.
+  const [handsOn, setHandsOn] = useState<HandsSwitch>({ left: true, right: true });
+  const handSel = handSelection(practice.hands, handsOn);
+
   /**
    * La tastiera di richiamo, aperta o chiusa dal pulsante a forma di pianoforte.
    *
@@ -471,6 +479,7 @@ const ScorePage: React.FC = () => {
     setPhase('idle');
     setIsPractice(true);
     setKeyboardOpen(true);
+    setHandsOn({ left: true, right: true });   // a ogni nuova sessione le mani sono tutte e due accese
     midi.clearRecording();
     stepStartRef.current = 0;
     lastLenRef.current = 0;
@@ -506,6 +515,7 @@ const ScorePage: React.FC = () => {
   const stopPractice = useCallback(() => {
     setIsPractice(false);
     setKeyboardOpen(false);
+    setHandsOn({ left: true, right: true });   // rientrando, si riparte da tutte e due le mani
     // Anche l'attesa va interrotta: senza questo, uscire mentre il browser
     // chiede il permesso lascerebbe a schermo il pannello "concedi il
     // permesso", con la pratica gia' chiusa.
@@ -531,7 +541,11 @@ const ScorePage: React.FC = () => {
    * si sente mentre si suona.
    */
   useEffect(() => {
-    if (!isPractice || practice.phase !== 'ready') return;
+    // Con tutti e due gli interruttori spenti non si chiede niente: le note
+    // suonate in pausa restano nella registrazione e vengono giudicate quando
+    // si riaccende, come pressioni extra del passo corrente. Il confine
+    // lastLenRef resta indietro di proposito, cosi' al ritorno non si perdono.
+    if (!isPractice || practice.phase !== 'ready' || handSel.paused) return;
     const rec = midi.recording;
     if (rec.length === lastLenRef.current) return;
     lastLenRef.current = rec.length;
@@ -542,7 +556,53 @@ const ScorePage: React.FC = () => {
     lastSigRef.current = sig;
 
     practice.submit(eventi);
-  }, [midi.recording, midi.recording.length, isPractice, practice]);
+  }, [midi.recording, midi.recording.length, isPractice, practice, handSel.paused]);
+
+  // Gli interruttori L/R diventano la mano da chiedere al servizio solo quando
+  // il risultato e' DIVERSO da quella gia' scelta: `setHand` rifà il piano ogni
+  // volta che lo si richiama, anche con lo stesso valore, e una richiesta
+  // inutile a ogni render sarebbe un esercizio che si rifiatta da capo. In
+  // pausa non si chiama proprio: il piano resta quello che c'e', cosi'
+  // riaccendere un interruttore non costa nessuna richiesta.
+  useEffect(() => {
+    if (!isPractice || handSel.paused) return;
+    const h = handSel.target === 'both' ? null : handSel.target;
+    if (h !== practice.hand) void practice.setHand(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPractice, handSel.paused, handSel.target]);
+
+  // La mano spenta spegne di grigio ANCHE il suo rigo nello spartito, come il
+  // suo tasto sulla barra (richiesta esplicita 2026-11-07: "quando L o R sono
+  // spenti il pentagramma rispettivo diventi grigio come il tasto; se non e'
+  // possibile tutto il pentagramma almeno le sue note"). Si puo' fare tutto il
+  // rigo: OSMD racchiude le misure di ogni singolo rigo in un gruppo
+  // `g.staffline` con id che finisce -1 (sopra, la destra) o -2 (sotto, la
+  // sinistra), misurato nel DOM il 2026-11-07. Il numero di rigo e' un dato del
+  // rendering, non un'altezza delle note: le altezze non sono mai affidabili
+  // oltre i confini (lezione dell'octave-shift, vedi il cursore).
+  //
+  // Qui la pagina applica solo una classe, che vive nel CSS di questo file:
+  // nessun colore per singolo tracciato, quindi nessuna collisione con i
+  // salvataggi di fill/stroke dei marchi rossi a fine prova, e ripristinare
+  // significa togliere la classe. Uscire dalla pratica o rientrarvi la toglie
+  // da ogni rigo: fuori dalla pratica nessun rigo e' mai "spento".
+  useEffect(() => {
+    const gray = staffGray(practice.hands, handsOn);
+    const apply = () => {
+      for (const [suffix, off] of [['-1', isPractice && gray.upper], ['-2', isPractice && gray.lower]] as const) {
+        for (const g of document.querySelectorAll<SVGGElement>(`#sheet-container g.staffline[id$="${suffix}"]`)) {
+          g.classList.toggle('osmd-staff-off', off);
+        }
+      }
+    };
+    apply();
+    // Se il rendering si rifà (ridimensionamento della finestra), i gruppi sono
+    // nuovi e la classe e' persa: un rigo spento sembrerebbe vivo. E' l'unico
+    // evento per cui vale la pena riapplicare.
+    const reapply = () => apply();
+    window.addEventListener('resize', reapply);
+    return () => window.removeEventListener('resize', reapply);
+  }, [isPractice, practice.hands, handsOn]);
 
   // Il cursore e' avanzato: il prossimo passo comincia da dove siamo ora.
   //
@@ -980,8 +1040,9 @@ const ScorePage: React.FC = () => {
       {/* La tastiera di richiamo, sopra la striscia dei comandi. C'e' solo quando
           l'esercizio e' pronto: durante l'attesa del permesso MIDI o del piano non
           c'e' nessun passo da accendere, e una tastiera con i tasti tutti spenti
-          sarebbe un disegno che mente. */}
-      {isPractice && keyboardOpen && passoCorrente && (
+          sarebbe un disegno che mente. Con le mani tutte spente vale la stessa
+          ragione: nessun tasto viene chiesto, e una tastiera buia mentirebbe. */}
+      {isPractice && keyboardOpen && passoCorrente && !handSel.paused && (
         <PianoKeyboard
           expected={passoCorrente.pitch}
           pressed={practice.status?.pressed ?? []}
@@ -1032,9 +1093,10 @@ const ScorePage: React.FC = () => {
             problem={problem}
             verdictStep={practice.verdictStep}
             judging={practice.judging}
-            hand={practice.hand}
             hands={practice.hands}
-            onHandChange={(h) => void practice.setHand(h)}
+            handsOn={handsOn}
+            onHandToggle={(h) => setHandsOn((s) => ({ ...s, [h]: !s[h] }))}
+            handsOff={handSel.paused}
             dynamicsOn={practice.dynamicsOn}
             onDynamicsChange={practice.setDynamicsOn}
             keyboardOpen={keyboardOpen}

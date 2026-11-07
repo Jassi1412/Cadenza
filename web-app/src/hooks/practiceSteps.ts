@@ -247,3 +247,119 @@ export function stepProblem(input: {
   if (error) return { tone: 'warn', text: 'no verdict from the service', stale };
   return { tone: 'ok', text: 'correct', stale };
 }
+
+/**
+ * I due interruttori delle mani, come li ha chiesti chi usa l'app (2026-11-07):
+ * "cliccare una volta su L o R disattiva o attiva SOLO quello; per suonare
+ * tutte e due le mani devi premerle entrambe; se una e' disattivata deve
+ * diventare grigia, spenta". Non sono piu' la selezione di una mano: sono due
+ * interruttori indipendenti, e lo stato "tutto il brano" sono entrambi accesi.
+ * Con tutti e due spenti non viene chiesto niente a nessuna mano: l'esercizio
+ * resta fermo dov'e, senza tastiera accesa e senza giudizi, finche' non si
+ * riaccende qualcosa.
+ *
+ * Qui non c'e' React e non c'e' rete: lo consulta la pagina per decidere cosa
+ * mandare al servizio, e lo consulta la striscia per decidere quali lettere
+ * disegnare e come. La formula vive una volta sola, e `run_practice_tests.mjs`
+ * la esegue su node.
+ */
+export interface HandsSwitch {
+  left: boolean;
+  right: boolean;
+}
+
+export interface HandSelection {
+  /** la lettera L si disegna (su un pezzo con un solo rigo l'altra non c'e') */
+  showLeft: boolean;
+  showRight: boolean;
+  /** tutti gli interruttori disegnati sono spenti: niente esercizio, per ora */
+  paused: boolean;
+  /** la mano da mandare al servizio; "both" = il brano intero */
+  target: 'both' | 'left' | 'right';
+}
+
+export function handSelection(
+  hands: { right: number; left: number } | null,
+  on: HandsSwitch,
+): HandSelection {
+  const rHaNote = !!hands && hands.right > 0;
+  const lHaNote = !!hands && hands.left > 0;
+  const entrambe = rHaNote && lHaNote;
+  // Un rigo senza note non puo' offrire un esercizio vuoto: la sua lettera non
+  // si disegna nemmeno (la regola vecchia, misurata, resta).
+  const showLeft = entrambe || (lHaNote && !rHaNote);
+  const showRight = entrambe || (rHaNote && !lHaNote);
+
+  if (!showLeft && !showRight) {
+    // Il file non dichiara i righi: non c'e' nulla da accendere ne' spegnere.
+    return { showLeft: false, showRight: false, paused: false, target: 'both' };
+  }
+
+  // In pausa solo se gli INTERRUTTORI DISEGNATI sono tutti spenti: su un pezzo
+  // a un rigo la lettera assente non conta, e l'unica presente da sola basta
+  // a fermare tutto — quello e' esattamente cio' che fa il suo interruttore.
+  const spentiTutti = (!showLeft || !on.left) && (!showRight || !on.right);
+  if (spentiTutti) {
+    return { showLeft, showRight, paused: true, target: 'both' };
+  }
+
+  // Con entrambi accesi (o con un rigo solo acceso quando di righi ce n'e'
+  // uno) si suona il brano intero: e' la stessa esecuzione che il servizio
+  // chiama "both", nessun nuovo piano da chiedere.
+  if (entrambe && on.left !== on.right) {
+    return { showLeft, showRight, paused: false, target: on.left ? 'left' : 'right' };
+  }
+  return { showLeft, showRight, paused: false, target: 'both' };
+}
+
+/**
+ * Quali righi DEL RENDERING dipingersi di grigio. Stessa richiesta del 2026-11-07,
+ * letta fino in fondo: "quando L o R sono spenti, il pentagramma rispettivo nello
+ * spartito diventa grigio come il tasto; se non e' possibile tutto il pentagramma,
+ * almeno le sue note". OSMD racchiude le misure di ogni singolo rigo in un gruppo
+ * `g.staffline` con id `<parte>-<numero_rigo>` (misurato nel DOM, 2026-11-07):
+ * suffisso 1 = rigo sopra = mano destra, suffisso 2 = sotto = sinistra. Il numero
+ * di rigo e' un dato del DOM, non un'altezza delle note: e' la stessa distinzione
+ * per cui il cursore conta le posizioni e non confronta altezze (octave-shift).
+ *
+ * Anche questa decisione vive nel modulo puro accanto a `handSelection`: la pagina
+ * si limita a cercare i gruppi con quel suffisso e mettere/togliere una classe.
+ */
+export interface StaffGray {
+  /** i gruppi di rigo col suffisso "-1" (sopra, la destra) si dipingono grigi */
+  upper: boolean;
+  /** id gruppi col suffisso "-2" (sotto, la sinistra) */
+  lower: boolean;
+}
+
+export function staffGray(
+  hands: { right: number; left: number } | null,
+  on: HandsSwitch,
+): StaffGray {
+  if (!hands) return { upper: false, lower: false };
+
+  const rHaNote = hands.right > 0;
+  const lHaNote = hands.left > 0;
+
+  if (rHaNote && lHaNote) {
+    // Il file sa distinguere le due mani (e' la stessa condizione con cui il
+    // servizio calcola `split: right>0 and left>0`, misurata in practice.py):
+    // ogni rigo segue il suo interruttore, e con tutti e due spenti — pausa —
+    // entrambi i righi si spengono insieme.
+    return { upper: !on.right, lower: !on.left };
+  }
+
+  if (rHaNote || lHaNote) {
+    // Un solo rigo con note: l'unico interruttore disegnato lo comanda, e il
+    // momento in cui quell'interruttore e' spento E' esattamente la pausa;
+    // niente pausa, niente grigio. Si dichiarano veri entrambi i suffissi perche'
+    // non si puo' sapere dai numeri quale suffisso scegliera' il rendering: dei
+    // due gruppi cercati, uno solo esistera', e quello che non c'e' non verra'
+    // mai toccato.
+    return handSelection(hands, on).paused ? { upper: true, lower: true } : { upper: false, lower: false };
+  }
+
+  // File che non dichiara righi riconoscibili: nessuna lettera cambia davvero
+  // l'esercizio, e nessun rigo deve fingere di essere spento.
+  return { upper: false, lower: false };
+}

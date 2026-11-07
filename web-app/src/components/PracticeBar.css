@@ -216,16 +216,21 @@
   color: var(--accent-secondary, #735c00);
 }
 
-/* Spento perche' non c'e' niente da fare, non perche' il file non separa le mani:
-   qui il pulsante e' uno solo e spento non puo' andare. Si vede che non si tocca,
-   e il titolo dice il perche'. */
-.pb-chip:disabled,
-.pb-chip-stuck {
-  cursor: not-allowed;
+/* Spento VERO: l'interruttore di una mano che non partecipa. Chi suona deve
+   capire a colpo d'occhio quale mano e' esclusa senza leggere il titolo: il
+   colore della lettera accesa (oro) qui non c'e', la lettera e' grigia su
+   fondo grigio, come una lampadina spenta. Non e' "disabilitato": il tocco
+   funziona, riaccende — e il cursore deve restare di mano. */
+.pb-chip-off,
+.pb-chip-off:hover:not(:disabled) {
+  color: #b3aa9a;
+  background: #eceadf;
 }
 
-.pb-chip:disabled {
-  opacity: 0.55;
+/* Pausa voluta, non verdetto: niente punto (non vola nessuna richiesta) e
+   nessun colore dei giudizi. Il grigio delle attese, ma con le parole. */
+.pb-paused {
+  color: #9a9284;
 }
 
 @media (max-width: 30rem) {

@@ -352,16 +352,41 @@ try {
   console.log('\n5. Suono il primo passo');
   // Pressione SIMULTANEA in un solo evaluate: due `page.evaluate` separati
   // superano i 120 ms di rilascio su una macchina carica, il primo tasto si
-  // spegne prima che arrivi il secondo e `.pk-down >= 2` non si verifica MAI
-  // (misurato il 2026-11-06 con RAM libera a 0,2 GB: moriva qui, due volte).
-  // Il mezzo secondo di tenuta garantisce la finestra di contemporaneità senza
-  // spostare lordine dei rilasci rispetto al verdetto.
-  await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, attesi0);
-  await page.waitForFunction(() => document.querySelectorAll('.pk-down').length >= 2,
-    null, { timeout: 15000 });
-  check('i tasti chiesti diventano verdi nell\'istante in cui sono premuti',
-    (await premuti()).join(',') === attesi0.join(','),
-    `attesi=[${attesi0}] premuti=[${await premuti()}]`);
+  // spegne prima che arrivi il secondo (misurato il 2026-11-06 con RAM libera
+  // a 0,2 GB). Ma IL MOMENTO DEL VERDE puo' comunque non esistere come render:
+  // se pressione e avanzamento finiscono nello stesso commit, dall'esterno la
+  // classe `.pk-down` non si vede MAI, anche se tutto ha funzionato (misurato
+  // il 2026-11-07: moriva qui il waitForFunction da 15 s). L'osservatore sta
+  // DENTRO la pagina, dove il mutamento accade, e registra il vertice; se il
+  // momento viene compresso in un solo render, la prova che la pressione e'
+  // registrata diventa l'avanzamento del passo, che e' la stessa causa.
+  const momentoPressione = await page.evaluate(async (ps) => {
+    const prima = [...document.querySelectorAll('.pk-expected')]
+      .map((e) => e.dataset.pitch).sort((a, b) => a - b).join(',');
+    let vertice = 0, verdiDiVertice = [];
+    const kbd = document.querySelector('.piano-kbd');
+    const obs = new MutationObserver(() => {
+      const giu = document.querySelectorAll('.pk-down');
+      if (giu.length > vertice) {
+        vertice = giu.length;
+        verdiDiVertice = [...giu].map((k) => Number(k.dataset.pitch)).sort((a, b) => a - b);
+      }
+    });
+    if (kbd) obs.observe(kbd, { subtree: true, attributes: true, childList: true });
+    for (const n of ps) window.__press(n, 80, 600);
+    const fine = Date.now() + 4000;
+    let cambiato = false;
+    while (Date.now() < fine && !(cambiato =
+      [...document.querySelectorAll('.pk-expected')]
+        .map((e) => e.dataset.pitch).sort((a, b) => a - b).join(',') !== prima)) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    obs.disconnect();
+    return { vertice, verdiDiVertice: verdiDiVertice.join(','), cambiato };
+  }, attesi0);
+  check('la pressione dei tasti chiesti viene registrata: verdi accesi insieme o passo gia\' avanzato',
+    momentoPressione.vertice >= 2 || momentoPressione.cambiato,
+    JSON.stringify(momentoPressione));
   // L'avanzamento non si legge piu' da "1/128": lo dicono i tasti accesi del passo
   // successivo, che devono essere diversi da quelli del passo appena finito.
   await page.waitForFunction((prev) => {
@@ -392,24 +417,63 @@ try {
   check('il monitor e\' partito: nessun "cannot verify"',
     !/pb-broken/.test(classiChip), classiChip);
 
-  // ── 8. la mano destra sola ─────────────────────────────────────
+  // ── 8. spegnere la sinistra lascia la destra sola ──────────────
   console.log('\n7. Studio la mano destra sola');
   const dx = page.locator('#bar-hand-right');
   const sx = page.locator('#bar-hand-left');
+  // Tre confronti veri, tutti attesi: `locator.count()` senza await restituiva un
+  // PROMESSA, e una promessa è sempre truthy — `Promise === 1` era falso ma la
+  // `&&` finiva sull'oggetto e il check passava comunque, vuoto. (scoperto il
+  // 2026-11-07: i due conteggi non hanno mai davvero verificato nulla.)
+  const nTutte = await page.locator('#bar-hand-all').count();
+  const nDx = await dx.count();
+  const nSx = await sx.count();
   check('i pulsanti della mano sono due icone e non tre scritte, e il terzo pulsante "Tutte" non c\'e\'',
-    await page.locator('#bar-hand-all').count() === 0 && dx.count() === 1 && sx.count() === 1);
-  check('sono attivi perche\' questo spartito ha due righi', !(await dx.isDisabled()));
+    nTutte === 0 && nDx === 1 && nSx === 1, `tutte=${nTutte} dx=${nDx} sx=${nSx}`);
+  check('gli interruttori non sono mai disabilitati: si toccano sempre',
+    !(await dx.isDisabled()) && !(await sx.isDisabled()));
   check('all\'inizio sono tutti e due accesi: si studiano tutte e due le mani',
     ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
     && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
+
+  // Anche il RIGO sullo spartito segue gli interruttori (richiesta del giorno,
+  // letta fino in fondo: "quando L o R sono spenti il pentagramma rispettivo
+  // diventi grigio come il tasto"). OSMD racchiude le misure di ogni rigo in
+  // `g.staffline` con id che finisce -1 (sopra, destra) o -2 (sotto, sinistra).
+  // Si legge il filtro CALCOLATO, non la classe: una classe presente ma senza
+  // effetto visivo sarebbe un rigo "spento" che alla prova non regge lo sguardo.
+  // E si legge DOPO aver lasciato finire i 250 ms di dissolvenza che il CSS mette
+  // fra acceso e spento (transizione su `filter`): a metà transizione il valore
+  // calcolato è un intermedio, non "nessuno", e una lettura fatta subito dopo il
+  // clic raccontava "ancora grigio" mentre il rigo stava TORNANDO a colore — tre
+  // falsi allarmi sulla stessa riga di codice (misurato il 2026-11-07: 75/78).
+  const statoRighi = async () => {
+    await page.waitForTimeout(400);   // la dissolvenza dev'essere finita, si legge lo stato stabile
+    return page.evaluate(() => {
+      const lato = (suffisso) => {
+        const gs = [...document.querySelectorAll(`#sheet-container g.staffline[id$="${suffisso}"]`)];
+        return { n: gs.length, grigi: gs.filter((g) => getComputedStyle(g).filter !== 'none').length };
+      };
+      return { sopra: lato('-1'), sotto: lato('-2') };
+    });
+  };
+  const viviPrima = await statoRighi();
+  check('a mani tutte e due accese i righi sono tutti a colore, e ce ne sono due',
+    viviPrima.sopra.n > 0 && viviPrima.sopra.grigi === 0
+    && viviPrima.sotto.n > 0 && viviPrima.sotto.grigi === 0,
+    JSON.stringify(viviPrima));
+
   const pianiPrima = conta('POST /practice ');
   const rispostaDx = page.waitForResponse(
     (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
     { timeout: 120000 });
-  await dx.click();
+  // Dal 2026-11-07 le lettere sono DUE INTERRUTTORI: qui si SPEGNE la sinistra,
+  // e l'effetto cercato e' l'esercizio a mano destra. Non esiste piu' il tocco
+  // che "sceglie una mano": ogni lettera accende o spegne solo la propria.
+  await sx.click();
   await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
   const pianoDx = await (await rispostaDx).json();
-  check('cambiare mano chiede un piano nuovo',
+  check('spegnere una mano chiede un piano nuovo',
     conta('POST /practice ') === pianiPrima + 1,
     `${conta('POST /practice ') - pianiPrima} piani nuovi`);
   // Misurato in produzione sul brano di prova: con la destra il primo passo chiede UN
@@ -430,16 +494,54 @@ try {
     esclusoDx !== undefined
     && await page.locator(`.pk-offhand[data-pitch="${esclusoDx}"]`).count() === 1,
     `escluso=${esclusoDx}`);
-  check('il pulsante scelto risulta acceso e l\'altro spento',
+  check('spegnere una lettera cambia SOLO quella: la destra resta accesa',
     ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
-    && !((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
+    && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-off'));
+  // Lo "spento" deve vedersi, non leggersi: la lettera grigia e' un colore
+  // diverso da quella accesa, e questa e' l'unica prova che l'utente guarda la
+  // striscia a colpo d'occhio mentre suona.
+  const coloriMani = await page.evaluate(() => {
+    const colore = (id) => getComputedStyle(document.getElementById(id)).color;
+    return { spenta: colore('bar-hand-left'), accesa: colore('bar-hand-right') };
+  });
+  check('la lettera spenta e\' disegnata grigia, diversa da quella accesa',
+    coloriMani.spenta !== coloriMani.accesa, JSON.stringify(coloriMani));
+
+  // E insieme alla lettera si spegne il suo rigo: L era la sinistra, quindi
+  // grigia il sotto — tutto, chiavi comprese, perche' OSMD racchiude l'intero
+  // rigo in UN gruppo e la pagina lo spegne intero. Il sopra resta vivo: li'
+  // c'e' l'esercizio che si sta suonando.
+  const righiConLa = await statoRighi();
+  check('con L spenta anche il suo rigo (sotto) e\' grigio, il sopra no',
+    righiConLa.sopra.grigi === 0 && righiConLa.sotto.n > 0
+    && righiConLa.sotto.grigi === righiConLa.sotto.n,
+    JSON.stringify(righiConLa));
 
   // ── 9. mano sinistra: la nota esclusa si dichiara, non si giudica ──
   console.log('\n8. Mano sinistra: la nota dell\'altro rigo');
-  const rispostaSx = page.waitForResponse(
+  // Riaccendere la lettera spenta deve ridare il brano intero: le due lettere
+  // accese SONO "tutte e due le mani", nessun terzo pulsante lo dice piu'.
+  const rispostaRiavvio = page.waitForResponse(
     (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
     { timeout: 120000 });
   await sx.click();
+  await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
+  await rispostaRiavvio;
+  check('riaccendere la lettera spenta riporta al brano intero, chiedendo un piano nuovo',
+    conta('POST /practice ') === pianiPrima + 2
+    && ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
+    && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'),
+    `${conta('POST /practice ') - pianiPrima} piani da inizio sezione`);
+  const righiRiaccesi = await statoRighi();
+  check('e riaccendendo la lettera anche il rigo grigio torna a colore',
+    righiRiaccesi.sopra.grigi === 0 && righiRiaccesi.sotto.grigi === 0,
+    JSON.stringify(righiRiaccesi));
+  // E ora si spegne la DESTRA per studiare la sola sinistra: l'interruttore
+  // indipendente fa l'esatto contrario del vecchio tocco "scegli mano".
+  const rispostaSx = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
+  await dx.click();
   await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
   const pianoSx = await (await rispostaSx).json();
   const totaleSx = (pianoSx.steps ?? []).length;
@@ -460,41 +562,61 @@ try {
   const titoloDopoEsclusa = (await page.getAttribute('#bar-keys-btn', 'title')) ?? '';
   check('e la striscia lo dichiara nel titolo, senza contarla come errore',
     /other staff/i.test(titoloDopoEsclusa), titoloDopoEsclusa.replace(/\s+/g, ' ').slice(0, 100));
-  const chipSx = ((await page.textContent('#practice-problem')) ?? '').trim();
+  // La parolina del verdetto NON c'è quando non c'è niente da dire (pressione
+  // dell'escluso: nessun tasto studiato premuto, il servizio risponde `verdicts: {}`
+  // e la riga resta senza parole). L'elemento quindi puo' non esserci DEL TUTTO:
+  // questa lettura ne tollera l'assenza, perche' "nessuna parola" e' esattamente
+  // il verdetto onesto che questo progetto pretende sul silenzio.
+  const chipSx = await page.locator('#practice-problem')
+    .textContent({ timeout: 5000 }).catch(() => '');
   check('e non entra nel verdetto: nessun "wrong note"',
     !/wrong note/.test(chipSx), chipSx);
   check('e l\'esercizio non e\' avanzato',
     (await attesi()).join(',') === chiestoSx.join(','),
     `[${await attesi()}] contro [${chiestoSx}]`);
 
-  // Ora la nota del rigo studiato: il passo si completa, e la richiesta di verdetto
-  // deve portare la stessa mano su cui il piano e' stato costruito.
-  const rispostaPasso = page.waitForResponse(
-    (r) => r.url().includes('/practice/step'), { timeout: 25000 });
+  // Simmetrico: adesso tocca alla lettera DESTRA essere spenta, e il grigio
+  // deve essere passato al rigo di sopra lasciando in colore quello che si suona.
+  const righiSenzaLa = await statoRighi();
+  check('con R spenta anche il suo rigo (sopra) e\' grigio, il sotto no',
+    righiSenzaLa.sotto.grigi === 0 && righiSenzaLa.sopra.n > 0
+    && righiSenzaLa.sopra.grigi === righiSenzaLa.sopra.n,
+    JSON.stringify(righiSenzaLa));
+
+  // Ora la nota del rigo studiato: il passo si completa. Su questa macchina la
+  // pressione puo' essere INGOBBATA intera (note-on e note-off processati nello
+  // stesso batch: lo stesso starved documented elsewhere per .pk-down), e cosa
+  // fa uno studente vero? la ripreme. Anche la sonda la ripreme, con una tenuta
+  // piu' lunga, prima di dichiarare il fallimento.
+  const attesiCambia = (prev) => page.waitForFunction((p) => {
+    const k = [...document.querySelectorAll('.pk-expected')]
+      .map((e) => Number(e.dataset.pitch)).sort((a, b) => a - b).join(',');
+    return !!k && k !== p;
+  }, prev, { timeout: 12000 }).then(() => true).catch(() => false);
   await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, chiestoSx);
-  await rispostaPasso;
+  let avanzo = await attesiCambia(chiestoSx.join(','));
+  if (!avanzo) {
+    console.log('     (prima pressione inghiottita dalla macchina: riprovo come farebbe uno studente)');
+    await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 1600); }, chiestoSx);
+    avanzo = await attesiCambia(chiestoSx.join(','));
+  }
   check('la richiesta di verdetto dichiara la mano sinistra',
     richieste.some((r) => r.startsWith('POST /practice/step') && r.includes('"hand":"left"')),
     richieste.filter((r) => r.startsWith('POST /practice/step')).slice(-1)[0] ?? 'nessuna');
-  await page.waitForFunction((prev) => {
-    const k = [...document.querySelectorAll('.pk-expected')]
-      .map((e) => Number(e.dataset.pitch)).sort((a, b) => a - b).join(',');
-    return !!k && k !== prev;
-  }, chiestoSx.join(','), { timeout: 15000 });
-  check('la nota del rigo studiato fa avanzare',
-    (await attesi()).join(',') !== chiestoSx.join(','), await attesi());
+  check('la nota del rigo studiato fa avanzare', avanzo, await attesi());
 
   // ── 10. si torna al brano intero, e una nota sbagliata blocca ───
   console.log('\n9. Di nuovo tutte le mani, e una nota sbagliata blocca');
   const rispostaTutte = page.waitForResponse(
     (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
     { timeout: 120000 });
-  // Premere il pulsante GIA' scelto è quello che riporta a tutte e due le mani: non
-  // esiste piu' un terzo pulsante che lo dica al posto loro.
-  await sx.click();
+  // Riaccendere la destra spenta: con tutte e due le lettere accese l'esercizio
+  // e' di nuovo il brano intero. E' un click sull'interruttore giusto, non un
+  // "torna indietro" — l'altra lettera non era rimasta premuta per caso.
+  await dx.click();
   await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
   await rispostaTutte;
-  check('il tocco sullo stesso rigo riporta a tutte e due le mani',
+  check('riaccendere anche l\'ultima lettera spenta riporta a tutte e due le mani',
     ((await dx.getAttribute('class')) ?? '').includes('pb-chip-on')
     && ((await sx.getAttribute('class')) ?? '').includes('pb-chip-on'));
   await page.waitForFunction(() => document.querySelectorAll('.pk-expected').length === 2,
@@ -514,6 +636,67 @@ try {
   check('e il cursore non si e\' mosso', cursorePrima?.left === cursoreDopo?.left,
     `${cursorePrima?.left} -> ${cursoreDopo?.left}`);
 
+  // ── 10b. spente tutte e due le mani l'esercizio si ferma ────────
+  // Con tutti e due gli interruttori a zero non deve partire NESSUNA richiesta:
+  // il piano buono c'e' gia', buttarlo e ricaricarlo sarebbe un esercizio che
+  // riparte da capo mentre nessuno ha chiesto niente. E niente avanzamenti: le
+  // note suonate in pausa restano lì, giudicate solo dopo.
+  console.log('\n9b. Spengo tutte e due le mani: la pausa voluta');
+  const rispostaSpegniL = page.waitForResponse(
+    (r) => r.url().includes('/practice') && !r.url().includes('/practice/step'),
+    { timeout: 120000 });
+  await sx.click();                                   // si spegne la sinistra
+  await page.waitForSelector('.practice-bar:not(.practice-notice)', { timeout: 120000 });
+  await rispostaSpegniL;                              // ora partecipa solo la destra
+  const pianiPrimaPausa = conta('POST /practice ');
+  const passiPrimaPausa = conta('POST /practice/step');
+  const cursorePrimaPausa = await page.evaluate(CURSORE);
+  await dx.click();                                   // si spegne anche l'ultima
+  await page.waitForTimeout(700);
+  const rigaPausa = ((await page.textContent('#practice-problem')) ?? '').trim();
+  check('la pausa e\' DETTA, non lasciata al buio: la riga spiega perche\' non succede niente',
+    /Both hands are switched off/i.test(rigaPausa), rigaPausa);
+  check('e nella riga non c\'e\' nessun punto che pulsa: nessuna richiesta sta volando',
+    await page.locator('#practice-problem .pb-dot').count() === 0);
+  check('la tastiera sparisce con le mani: niente tasti accesi a chiedere qualcosa',
+    await page.locator('.piano-kbd').count() === 0);
+  // Con tutte e due le mani spente tutto lo spartito si spegne insieme ai suoi
+  // interruttori: due righi grigi e la riga che dice perche' non succede niente.
+  const righiPausa = await statoRighi();
+  check('in pausa entrambi i righi sono grigi',
+    righiPausa.sopra.n > 0 && righiPausa.sopra.grigi === righiPausa.sopra.n
+    && righiPausa.sotto.n > 0 && righiPausa.sotto.grigi === righiPausa.sotto.n,
+    JSON.stringify(righiPausa));
+  check('spegnere l\'ultima mano non chiede nessun piano nuovo',
+    conta('POST /practice ') === pianiPrimaPausa,
+    `${conta('POST /practice ') - pianiPrimaPausa} piani nuovi`);
+  await page.evaluate((ps) => { for (const n of ps) window.__press(n, 80, 600); }, chiestoDx);
+  await page.waitForTimeout(1500);
+  check('suonare in pausa non genera verdetti: nessuna richiesta di passo',
+    conta('POST /practice/step') === passiPrimaPausa,
+    `${conta('POST /practice/step') - passiPrimaPausa} richieste in piu'`);
+  const cursoreDopoPausa = await page.evaluate(CURSORE);
+  check('e il cursore resta fermo dove le mani si sono spente',
+    cursorePrimaPausa?.left === cursoreDopoPausa?.left,
+    `${cursorePrimaPausa?.left} -> ${cursoreDopoPausa?.left}`);
+  const pianiPrimaRipresa = conta('POST /practice ');
+  await dx.click();                                   // riaccende la destra: riparte DA SOLA
+  await page.waitForFunction(() => document.querySelectorAll('.pk-expected').length === 1,
+    null, { timeout: 10000 }).catch(() => {});
+  const tastieraRipresa = await page.locator('.piano-kbd').count();
+  check('riaccendere l\'ultima mano rimasta spenta fa ricomparire la tastiera',
+    tastieraRipresa === 1);
+  check('e riprende dal piano che c' + '\' era, senza chiedere niente al servizio',
+    conta('POST /practice ') === pianiPrimaRipresa,
+    `${conta('POST /practice ') - pianiPrimaRipresa} piani nuovi`);
+  // Al riprendere con una mano sola riaccesa, il colore torna SOLO sul rigo di
+  // quella mano: l'altra lettera e' ancora spenta, e il suo rigo resta grigio
+  // finche' non la si riaccende. Lo spartito dice la verita' stato per stato.
+  const righiRipresa = await statoRighi();
+  check('al riprendere a destra il rigo sopra torna a colore e il sotto resta grigio',
+    righiRipresa.sopra.grigi === 0 && righiRipresa.sotto.grigi === righiRipresa.sotto.n,
+    JSON.stringify(righiRipresa));
+
   // ── 11. uscire dalla pratica ──────────────────────────────────
   console.log('\n10. Esco dalla pratica');
   await page.screenshot({ path: path.join(SHOTS, 'practice.png'), fullPage: false });
@@ -526,6 +709,14 @@ try {
     (await page.textContent('#bar-step-btn')).includes('Practice'));
   check('il cursore si nasconde',
     await page.evaluate(CURSORE).then((c) => !c || !c.vis));
+  // Nessun rigo "spento" fuori dalla pratica: uscendo, gli interruttori non
+  // esistono piu' e lo spartito torna tutto a colore. Se la classe restasse,
+  // nella modalita' normale due righi grigi racconterebbero una mano assente
+  // che nessuno ha spento.
+  const righiFuori = await statoRighi();
+  check('uscire dalla pratica restituisce il colore a tutti i righi',
+    righiFuori.sopra.grigi === 0 && righiFuori.sotto.grigi === 0,
+    JSON.stringify(righiFuori));
 
   console.log('\nrichieste al servizio: ' + richieste.join(' '));
   const eccezioni = log.filter((l) => l.startsWith('[pageerror]'));
@@ -539,20 +730,30 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'errore.png') }).catch(() => {});
   esiti.push({ nome: 'esecuzione completa', ok: false });
   console.log(log.slice(-12).join('\n'));
-} finally {
-  await browser.close();
 }
 
+// L'esito su disco vale PIU' della chiusura della finestra: si scrive PRIMA di
+// close. Se il teardown di Chromium pende (succede su questa macchina sotto
+// stress: il 2026-11-07 il log diceva 71/71 e il JSON era rimasto fermo alla
+// run precedente perche' `browser.close()` girava prima della scrittura), il
+// processo può anche crepare — ma gli esiti sono già salvati, e la dottrina
+// che vuole il JSON come fonte d'autorità resta vera.
 const falliti = esiti.filter((e) => !e.ok);
-console.log('\n' + '='.repeat(60));
-console.log(`${esiti.length - falliti.length}/${esiti.length} controlli superati`);
-// L'elenco dei falliti viene riscritto QUI, dopo il riepilogo: quando l'output passa
-// da un pipe (Tee, Select-String) le ultime righe del flusso possono perdersi
-// nell'interlacciamento stdout/stderr, e così un controllo fallito sparisce dal log
-// pur essendo nel conteggio — successo due volte su questa macchina. Il file JSON è
-// la fonte d'autorità: tutti i controlli, uno per uno, con l'esito.
-for (const f of falliti) console.log(`FALLITO (elenco finale): ${f.nome}`);
-fs.writeFileSync(path.join(ROOT, 'alignment', '_probe_traces', 'browser-esiti.json'),
-  JSON.stringify(esiti, null, 1));
-console.log('='.repeat(60));
+try {
+  console.log('\n' + '='.repeat(60));
+  console.log(`${esiti.length - falliti.length}/${esiti.length} controlli superati`);
+  // L'elenco dei falliti viene riscritto QUI, dopo il riepilogo: quando l'output passa
+  // da un pipe (Tee, Select-String) le ultime righe del flusso possono perdersi
+  // nell'interlacciamento stdout/stderr, e così un controllo fallito sparisce dal log
+  // pur essendo nel conteggio — successo due volte su questa macchina. Il file JSON è
+  // la fonte d'autorità: tutti i controlli, uno per uno, con l'esito.
+  for (const f of falliti) console.log(`FALLITO (elenco finale): ${f.nome}`);
+  fs.writeFileSync(path.join(ROOT, 'alignment', '_probe_traces', 'browser-esiti.json'),
+    JSON.stringify(esiti, null, 1));
+  console.log('='.repeat(60));
+} finally {
+  // Il browser si chiude per ultimo, e un suo errore non deve cancellare la
+  // notizia che gli esiti sono stati scritti.
+  try { await browser.close(); } catch { console.log("(chiusura del browser fallita: non cambia nulla, gli esiti sono gia' sul disco)"); }
+}
 process.exit(falliti.length ? 1 : 0);

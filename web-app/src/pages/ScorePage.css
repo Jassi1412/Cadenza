@@ -317,6 +317,26 @@
   color: #8b2f2f;
 }
 
+/* Il rigo spento diventa grigio come la sua lettera (richiesta 2026-11-07).
+   Quando L o R e' spento, il gruppo `g.staffline` di quel rigo — id col
+   suffisso -1 (sopra, destra) o -2 (sotto, sinistra, misurato nel DOM) —
+   scolorisce insieme all'interruttore. La richiesta diceva "grigio come il
+   tasto": e' lo stesso effetto morto, ottenuto spegnendo il nero sulla carta.
+   Filtro sul gruppo, non colori sui singoli percorsi: ripristinare significa
+   togliere una classe, e nessun fill/stroke viene toccato — niente collisione
+   con i marchi rossi di fine prova ne' con il loro ripristino. */
+#sheet-container g.staffline.osmd-staff-off {
+  filter: grayscale(1) opacity(0.32);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Lo spegnimento e la riaccensione del rigo accompagnano il clic, perche'
+     anche il grigio del chip non arriva di colpo. */
+  #sheet-container g.staffline {
+    transition: filter 0.25s ease;
+  }
+}
+
 /* ── Mobile Layout Adjustments ── */
 @media (max-width: 768px) {
   .sheet-container {

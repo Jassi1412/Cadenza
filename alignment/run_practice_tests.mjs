@@ -41,7 +41,7 @@ const emitted = path.join(OUT, 'practiceSteps.js');
 if (!existsSync(emitted)) throw new Error('tsc non ha prodotto practiceSteps.js');
 renameSync(emitted, path.join(OUT, 'practiceSteps.cjs'));
 
-const { noteName, pressedPitches, stepStatus, stepProblem } = require(path.join(OUT, 'practiceSteps.cjs'));
+const { noteName, pressedPitches, staffGray, stepProblem, stepStatus, handSelection } = require(path.join(OUT, 'practiceSteps.cjs'));
 
 const on = (timestamp, note, rawAttack = 90) => ({ type: 'noteon', note, rawAttack, timestamp });
 const off = (timestamp, note) => ({ type: 'noteoff', note, timestamp });
@@ -179,6 +179,64 @@ check('108 e\' C8 (estremo della tastiera)', noteName(108) === 'C8');
 check('61 e\' C#4', noteName(61) === 'C#4');
 check('l\'ottava cambia a ogni do: 59 e\' B3, 60 e\' C4',
   noteName(59) === 'B3' && noteName(60) === 'C4');
+
+// ── gli interruttori L/R, come li ha chiesti chi usa l'app ──
+// Due interruttori indipendenti: spenta una mano si esercita l'altra, spente
+// tutte e due si sta fermi, accese tutte e due si suona il pezzo intero. Su un
+// pezzo a un rigo solo la lettera presente e' l'unica che puo' mettere in pausa.
+const deepEq = (a, b) =>
+  Object.keys(a).length === Object.keys(b).length
+  && Object.keys(a).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+const dueRighi = { right: 128, left: 88, unknown: 0, split: true };
+
+check('entrambe accese = brano intero, nessuna pausa',
+  deepEq(handSelection(dueRighi, { left: true, right: true }),
+    { showLeft: true, showRight: true, paused: false, target: 'both' }));
+check('solo L accesa = mano sinistra chiesta al servizio',
+  handSelection(dueRighi, { left: true, right: false }).target === 'left');
+check('solo R accesa = mano destra chiesta al servizio',
+  handSelection(dueRighi, { left: false, right: true }).target === 'right');
+check('entrambe spente = pausa, con entrambe le lettere disegnate',
+  deepEq(handSelection(dueRighi, { left: false, right: false }),
+    { showLeft: true, showRight: true, paused: true, target: 'both' }));
+
+const unRigoSola = { right: 128, left: 0, unknown: 4, split: true };
+check('un rigo solo: la lettera assente non si disegna nemmeno',
+  handSelection(unRigoSola, { left: true, right: true }).showLeft === false);
+check('un rigo solo acceso = brano intero, e non e\' mai "left"',
+  deepEq(handSelection(unRigoSola, { left: true, right: true }),
+    { showLeft: false, showRight: true, paused: false, target: 'both' }));
+check('un rigo solo spento = pausa (e\' l\'unica lettera disegnata)',
+  handSelection(unRigoSola, { left: true, right: false }).paused === true);
+check('la lettera assente non puo' + '\' da sola mettere in pausa',
+  handSelection(unRigoSola, { left: false, right: true }).target === 'both');
+
+const senzaRighi = { right: 0, left: 0, unknown: 64, split: false };
+check('senza righi riconosciuti: nessuna lettera, nessuna pausa possibile',
+  deepEq(handSelection(senzaRighi, { left: false, right: false }),
+    { showLeft: false, showRight: false, paused: false, target: 'both' }));
+
+// ── i righi dello spartito seguono gli interruttori (2026-11-07) ──
+// "quando L o R sono spenti il pentagramma rispettivo diventi grigio come il
+// tasto". staffGray decide QUALI gruppi di rendering spegnere: suffisso -1 =
+// rigo sopra = destra, -2 = sotto = sinistra (numeri del DOM, non altezze).
+check('righi: entrambe accese, nessun rigo grigio',
+  deepEq(staffGray(dueRighi, { left: true, right: true }), { upper: false, lower: false }));
+check('righi: L spenta grigia SOLO il rigo sotto (il suo)',
+  deepEq(staffGray(dueRighi, { left: false, right: true }), { upper: false, lower: true }));
+check('righi: R spenta grigia SOLO il rigo sopra (il suo)',
+  deepEq(staffGray(dueRighi, { left: true, right: false }), { upper: true, lower: false }));
+check('righi: pausa = entrambi i righi grigi',
+  deepEq(staffGray(dueRighi, { left: false, right: false }), { upper: true, lower: true }));
+check('righi: un rigo solo acceso non e\' grigio, spento lo e\'',
+  deepEq(staffGray(unRigoSola, { left: true, right: true }), { upper: false, lower: false })
+  && deepEq(staffGray(unRigoSola, { left: true, right: false }), { upper: true, lower: true }));
+check('righi: la lettera assente non puo\' grigiare niente su un rigo solo',
+  deepEq(staffGray(unRigoSola, { left: false, right: true }), { upper: false, lower: false }));
+check('righi: senza righi riconosciuti nessun gruppo da grigiare, anche in pausa-mancata',
+  deepEq(staffGray(senzaRighi, { left: false, right: false }), { upper: false, lower: false }));
+check('righi: piano non ancora arrivato = nessun rigo grigio',
+  deepEq(staffGray(null, { left: true, right: true }), { upper: false, lower: false }));
 
 const falliti = esiti.filter(([, ok]) => !ok);
 console.log('\n' + '='.repeat(58));

@@ -1,9 +1,9 @@
 import React from 'react';
 import './PracticeBar.css';
 import { Piano } from 'lucide-react';
-import { noteName } from '../hooks/practiceSteps';
-import type { StepProblem, StepStatus } from '../hooks/practiceSteps';
-import type { HandInfo, PracticeHand } from '../hooks/usePractice';
+import { handSelection, noteName } from '../hooks/practiceSteps';
+import type { HandsSwitch, StepProblem, StepStatus } from '../hooks/practiceSteps';
+import type { HandInfo } from '../hooks/usePractice';
 
 /**
  * La barra dei comandi della modalita' practice: una riga sola, sopra la pillola
@@ -46,10 +46,14 @@ export interface PracticeBarProps {
   /** a quale passo appartiene l'ultimo verdetto ricevuto, per dirlo nel tooltip */
   verdictStep: number;
   judging: boolean;
-  hand: PracticeHand;
   /** che cosa questo spartito permette di separare; null finche' non si e' risposto */
   hands: HandInfo | null;
-  onHandChange: (hand: PracticeHand) => void;
+  /** i due interruttori delle mani, nello stato lasciato da chi suona */
+  handsOn: HandsSwitch;
+  /** schiacciare una lettera cambia SOLO quell'interruttore */
+  onHandToggle: (hand: 'left' | 'right') => void;
+  /** spenti tutti gli interruttori disegnati: l'esercizio e' in pausa */
+  handsOff: boolean;
   dynamicsOn: boolean;
   onDynamicsChange: (on: boolean) => void;
   /** la tastiera di richiamo e' aperta: il pulsante e' premuto e la tastiera sta sopra */
@@ -61,8 +65,8 @@ export interface PracticeBarProps {
 }
 
 const PracticeBar: React.FC<PracticeBarProps> = ({
-  stepIndex, total, measure, expected, status, problem, verdictStep, judging, hand, hands,
-  onHandChange, dynamicsOn, onDynamicsChange, keyboardOpen, onKeyboardToggle, suspended, error,
+  stepIndex, total, measure, expected, status, problem, verdictStep, judging, hands,
+  handsOn, onHandToggle, handsOff, dynamicsOn, onDynamicsChange, keyboardOpen, onKeyboardToggle, suspended, error,
 }) => {
   const altraMano = status?.other_hand ?? [];
   const estranee = status?.extra ?? [];
@@ -93,17 +97,21 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
     perche ? `\nNot judged in this mode:\n${perche}` : '',
   ].filter(Boolean).join('\n');
 
-  // ── I due pulsanti della mani, L e R ──
-  // Il pezzo d'inglese "Tutte" era un terzo pulsante che diceva "tutti e due", la
-  // stessa cosa che dicono i due accesi insieme: ora lo stato "tutte le mani" e'
-  // semplicemente L e R entrambi premuti. Se il brano ha un solo rigo si mostra
-  // quel pulsante solo, non una coppia di cui meta' non puo' fare niente.
+  // ── I due pulsanti della mani, L e R: DUE INTERRUTTORI ──
+  // Dal 2026-11-07 le lettere non "scelgono" piu' una mano: ognuna ACCENDE o
+  // SPEGNE la propria, indipendentemente dall'altra. Accese tutte e due = brano
+  // intero; spente tutte e due = pausa voluta, con la riga che lo dice. La
+  // formula di questo bivio sta in `handSelection` (modulo puro, provato su
+  // node): la striscia lo consulta per sapere quali lettere disegnare, la
+  // pagina per sapere quale mano chiedere al servizio. La stessa formula, due
+  // consultazioni: non puo' divergere.
+  const sel = handSelection(hands, handsOn);
   const rightNotes = hands !== null && hands.right > 0;
   const leftNotes = hands !== null && hands.left > 0;
   const entrambe = rightNotes && leftNotes;
-  // Esattamente un rigo con delle note: allora il pulsante dell'altro non avrebbe
-  // niente da escludere, e mostrarlo spento vuol dire offrire un tocco che non fa
-  // niente. Si mostra uno solo, acceso, e il perche' sta nel titolo.
+  // Esattamente un rigo con delle note: allora la lettera dell'altro non ha
+  // niente da accendere, e disegnarla vuol dire offrire un tocco che non fa
+  // niente. Si mostra una sola, e il perche' sta nel titolo.
   const unaSola = hands !== null && rightNotes !== leftNotes;
   const manoUnica = rightNotes && !leftNotes ? 'right'
     : leftNotes && !rightNotes ? 'left' : null;
@@ -111,11 +119,11 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
   const percheMani = hands === null
     ? 'Waiting to learn whether this score separates the hands.'
     : entrambe
-      ? 'Study one staff at a time: pressing L or R picks that hand, and the other staff\'s notes are not asked for, they do not stop the cursor and they are not judged. Press the same key again to go back to both hands.'
+      ? 'L and R are switches, each on its own: lit means that hand takes part, grey means it is off — its staff is not asked for, does not stop the cursor and is not judged. Press a letter to switch just that hand. Both letters on: the whole piece; both off: nothing is asked until one goes back on.'
       : unaSola
         // Un pulsante spento che non puo' fare niente deve dire perche': uguale a
         // uno che non c'e', tranne per lo spazio che occupa.
-        ? `This score has only the ${manoUnica} staff: there is nothing to exclude.`
+        ? `This score has only the ${manoUnica} staff: there is nothing to exclude. Its letter switches the exercise off and on; with it off, nothing is asked or judged.`
         : 'This file does not declare staves, so there is no right or left hand to isolate: the whole piece is practised.';
 
   // Le note senza rigo riconosciuto restano nell'esercizio con qualsiasi mano: dirlo
@@ -125,16 +133,9 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
     ? ` ${hands.unknown} notes declare no staff: they stay in the exercise with either hand.`
     : '';
 
-  // Schiacciare un rigo LO SCELGE, non lo spegne: con tutti e due accesi, premere
-  // "R" deve dare l'esercizio a mano destra, non il suo contrario. Se il rigo e'
-  // gia' quello scelto, lo stesso tocco si torna a tutte e due — lo stato "tutte le
-  // mani" sono i due pulsanti accesi insieme, e un terzo pulsante che lo diceva era
-  // il pulsante inutile che chi usa l'app ha chiesto di togliere.
-  const premiMano = (h: Exclude<PracticeHand, null>) => {
-    onHandChange(hand === h ? null : h);
-  };
-
-  const acceso = (h: Exclude<PracticeHand, null>) => hand === null || hand === h;
+  // Nessun "premi per scegliere": qui ogni lettera vale per la propria mano e
+  // basta. L'accensione dell'altra non spegne questa, e lo stato in pausa ha
+  // una riga sua, non un terzo pulsante.
 
   return (
     <section className="practice-bar" aria-label="Practice controls">
@@ -155,7 +156,17 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
             niente da dire. `judging` non scrive "verifico…": lo dice il punto che
             pulsa. La scritta tolta era la stessa ragione per cui chi suona ha chiesto
             la riga minima. */}
-        {(problem.text || judging) && (
+        {/* Con le mani tutte spente la riga dice PERCHE' non succede niente:
+            un silenzio muto su una scelta fatta a metà sembra un guasto. Il
+            punto colorato qui non c'è: non sta volando nessuna richiesta, e
+            il punto che pulsa mentirebbe. */}
+        {handsOff ? (
+          <span className="pb-problem pb-paused" id="practice-problem">
+            {unaSola
+              ? `The ${manoUnica} staff is switched off — press ${manoUnica === 'left' ? 'L' : 'R'} to continue`
+              : 'Both hands are switched off — press L or R to continue'}
+          </span>
+        ) : (problem.text || judging) && (
           <span
             className={`pb-problem pb-${problem.tone}${problem.stale ? ' pb-stale' : ''}`}
             id="practice-problem"
@@ -183,25 +194,23 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
           className="pb-seg" role="group" aria-label="Hands to practise"
           title={`${percheMani}${entrambe ? senzaRigo : ''}`}
         >
-          {(entrambe || manoUnica === 'left') && (
+          {sel.showLeft && (
             <button
               id="bar-hand-left"
-              className={`pb-chip${unaSola ? ' pb-chip-on pb-chip-stuck' : acceso('left') ? ' pb-chip-on' : ''}`}
-              onClick={() => premiMano('left')}
-              disabled={unaSola}
-              aria-pressed={unaSola ? true : acceso('left')}
+              className={`pb-chip${handsOn.left ? ' pb-chip-on' : ' pb-chip-off'}`}
+              onClick={() => onHandToggle('left')}
+              aria-pressed={handsOn.left}
               aria-label="Left hand"
             >
               L
             </button>
           )}
-          {(entrambe || manoUnica === 'right') && (
+          {sel.showRight && (
             <button
               id="bar-hand-right"
-              className={`pb-chip${unaSola ? ' pb-chip-on pb-chip-stuck' : acceso('right') ? ' pb-chip-on' : ''}`}
-              onClick={() => premiMano('right')}
-              disabled={unaSola}
-              aria-pressed={unaSola ? true : acceso('right')}
+              className={`pb-chip${handsOn.right ? ' pb-chip-on' : ' pb-chip-off'}`}
+              onClick={() => onHandToggle('right')}
+              aria-pressed={handsOn.right}
               aria-label="Right hand"
             >
               R
