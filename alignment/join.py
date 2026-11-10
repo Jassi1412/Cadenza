@@ -570,6 +570,19 @@ class ScoreModel:
         """Numero di misura 1-indexato, dalle battute e dal tempo."""
         return int(beat // 2) + 1  # 2/2: due battute per misura
 
+    def attacks(self):
+        """Gli attacchi dello spartito, in ordine cronologico.
+
+        Restituisce [(battitura, [pitch attesi su quell'attacco]), ...], indice =
+        chordId. Lo chiede server.py per la copertura dopo il join: una riga di
+        traccia nasce solo da un tasto PREMUTO, quindi l'attacco che nessuno ha
+        premuto non esiste nella traccia e nessuna regola RML puo' puntarlo —
+        l'unica fonte della sua esistenza e' lo spartito stesso. Stesso ordine,
+        stesso indice di `chord_at`: niente elenco parallelo che puo' divergere.
+        """
+        return [(o, list(self._group_pitches.get(i, [])))
+                for i, o in enumerate(self._onsets)]
+
     def score_pitches_at(self, beat, tol=0.25):
         """Quali note dello spartito dovrebbero suonare in questa battuta.
 

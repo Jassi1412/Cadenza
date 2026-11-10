@@ -295,8 +295,25 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'presa-voto.png'), fullPage: false });
   await page.click('.pc-card button:has-text("Close")');
   await page.waitForSelector('.pc-card', { state: 'detached', timeout: 8000 }).catch(() => {});
-  check('il "Close" della carta ripulisce tutto',
+  check('il "Close" toglie la carta centrata dal mezzo dello schermo',
     await page.locator('.pc-card').count() === 0);
+  // L'altra metà della richiesta del 2026-11-10, parola per parola: "quando si
+  // clicca close si deve poter vedere lo spartito finché non si ricomincia da
+  // capo, azione fatta dall'utente". Close NON è un ripulisci-tutto: i colori
+  // restano dove sono, e il mouse deve ancora poterli interrogare. La presa
+  // tempesta della sonda lascia sempre rossi (le note mai premute sono decine),
+  // quindi qui il conteggio sotto zero sarebbe un guaio vero, non un caso limite.
+  const rossiDopoClose = await page.evaluate(() => {
+    let n = 0;
+    for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+      for (const p of h.querySelectorAll('path')) {
+        if ((p.getAttribute('fill') || '').toLowerCase() === '#a0442c') { n++; break; }
+      }
+    }
+    return n;
+  });
+  check('dopo Close i rossi restano sulla partitura, pronti da hoverare',
+    rossiDopoClose > 0, `${rossiDopoClose} teste ancora rosse dopo la chiusura`);
   } // ── fine sezione 1b (saltabile con SKIP_TAKE=1) ────────────────────
 
   // ── 2. entrare in pratica ───────────────────────────────────────

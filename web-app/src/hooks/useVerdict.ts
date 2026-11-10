@@ -170,6 +170,14 @@ export interface UseVerdictReturn {
   verdicts: VerdictMap | null;
   error: string | null;
   noteCount: number;
+  /**
+   * Gli attacchi scritti puliti dichiarati dal servizio (campo "correct" della
+   * risposta): pitch giusto e dentro il tempo. Li decide la copertura python,
+   * non i monitor RML — per questo viaggiano FUORI dalla mappa dei verdetti,
+   * accanto ad essa. Null finché non arriva una risposta; la pagina li passa a
+   * planMarks, che li tinge di verde dove nessun rosso c'e'.
+   */
+  correct: ScoreLocation[] | null;
   analyse: (scoreXml: string, tempoFactor?: number) => Promise<void>;
   reset: () => void;
 }
@@ -182,6 +190,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [verdicts, setVerdicts] = useState<VerdictMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteCount, setNoteCount] = useState(0);
+  const [correct, setCorrect] = useState<ScoreLocation[] | null>(null);
   const busy = useRef(false);
 
   const analyse = useCallback(async (scoreXml: string, tempoFactor = 1.0) => {
@@ -207,6 +216,10 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
         throw new Error(payload?.error ?? `the service responded with ${response.status}`);
       }
       setVerdicts(payload.verdicts as VerdictMap);
+      // lista verde: il servizio la dichiara anche quando tutti i monitor sono
+      // morti, perche' e' un fatto di copertura e non un verdetto. Assente =
+      // servizio vecchio che non la conosce ancora: nulla da colorare, niente errore.
+      setCorrect(Array.isArray(payload.correct) ? (payload.correct as ScoreLocation[]) : []);
       setStatus('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -221,7 +234,8 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
     setVerdicts(null);
     setError(null);
     setNoteCount(0);
+    setCorrect(null);
   }, []);
 
-  return { status, verdicts, error, noteCount, analyse, reset };
+  return { status, verdicts, error, noteCount, correct, analyse, reset };
 }

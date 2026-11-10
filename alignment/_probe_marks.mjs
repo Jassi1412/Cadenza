@@ -94,7 +94,7 @@ const COLS = [
   { measure: 32, beat: 3, attack: 127, rules: [{ name: 'pitch-agreement' }, { name: 'dynamics-adherence' }] },
 ];
 
-const esito = await page.evaluate(async ([cols, red]) => {
+const esito = await page.evaluate(async ([cols, red, verde]) => {
   const out = {};
   const osmd = window.__osmd;
 
@@ -148,8 +148,37 @@ const esito = await page.evaluate(async ([cols, red]) => {
   out.fuoriAttaccoMissed = out2.missed;
   window.__marks.clear(out2.state);
 
+  // il VERDE chiesto il 2026-11-10 ("le note premute correttamente fossero
+  // colorate di verde"): un attacco pulito dichiarato dal servizio si tinge
+  // del verde del tema e la mappa delle punte hover non lo vede mai — qui il
+  // numero e il restore, la prova col mouse vero arriva piu' avanti.
+  const out3 = window.__marks.paint(osmd, [], [
+    { measure: 12, beat: 0, attack: 40 },
+    { measure: 20, beat: 1, attack: 75 },
+  ]);
+  out.verdiPainted = out3.painted;
+  out.verdiMissed = out3.missed.length;
+  // la stessa pennellata puo' vedere rosso e verde sullo stesso attacco, e
+  // li' il rosso vince: con queste COLS pero' i due verdi restano entrambi,
+  // e questo e' il numero vero della passata.
+  let testeVerdi = 0;
+  for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+    for (const p of h.querySelectorAll('path')) {
+      if ((p.getAttribute('fill') || '').toLowerCase() === verde) { testeVerdi++; break; }
+    }
+  }
+  out.testeVerdi = testeVerdi;
+  window.__marks.clear(out3.state);
+  let restanoVerdi = 0;
+  for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+    for (const p of h.querySelectorAll('path')) {
+      if ((p.getAttribute('fill') || '').toLowerCase() === verde) { restanoVerdi++; break; }
+    }
+  }
+  out.restanoVerdiDopoClear = restanoVerdi;
+
   return out;
-}, [COLS, RED]);
+}, [COLS, RED, '#2e7d32']);
 
 // ------------------------------------------------------------------ verdetti
 check('tutti gli 11 punti trovano una testa di nota (nessuno "non raggiunto")',
@@ -163,6 +192,12 @@ check('il nero originale delle teste e\' tornato al suo posto', esito.neroTornat
 check('l\'attacco fuori dal brano non colora niente e si dichiara mancato',
   esito.fuoriAttaccoPainted === 0 && esito.fuoriAttaccoMissed.includes('pitch-agreement'));
 check('la pennellata non lascia il cursore visibile', esito.cursoreNascostoDopo);
+check('i due attacchi puliti trovano la loro testa, nessuno si dichiara mancato',
+  esito.verdiPainted === 2 && esito.verdiMissed === 0);
+check('le teste verdi sono almeno due, del verde del tema — ogni fermata pulita tinge tutto l\'accordo',
+  esito.testeVerdi >= 2);
+check('dopo clear non resta nessuna testa verde, il restore vale anche per il verde',
+  esito.restanoVerdiDopoClear === 0);
 
 // --------------------------------------------------------------------- l'hover
 // La card la si prova col mouse VERO, perche' e' li' che il ponte window-listener
@@ -242,6 +277,40 @@ await page.mouse.move(centroB.x, centroB.y);
 await page.waitForTimeout(400);
 check('una testa cancellata smette di rispondere all\'hover: la mappa si pulisce col rosso',
   await page.locator('.ehc-card').count() === 0);
+// stato V: il VERDE non apre nessun libro. Il verde dice "hai fatto la cosa
+// giusta" e una card che spiega un successo sarebbe un insegnante che ripete
+// "bravo bravo" a ogni tasto premuto (richiesta 2026-11-10, forma negativa: la
+// card sta sugli errori). Il mouse vero qui conferma che la mappa markTips non
+// ha mai visto quella testa: nessun listener da spegnere, semplicemente non c'e'.
+await page.evaluate((g) => {
+  const res = window.__marks.paint(window.__osmd, [], [g]);
+  (window.__sonda = window.__sonda || []).push(res.state);
+}, { measure: 12, beat: 0, attack: 40 });
+const centroVerde = await page.evaluate(() => {
+  for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+    for (const p of h.querySelectorAll('path')) {
+      if ((p.getAttribute('fill') || '').toLowerCase() === '#2e7d32') {
+        const r = h.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+    }
+  }
+  return null;
+});
+check('la nota verde si trova sullo schermo dove la pittura dice di averla messa',
+  centroVerde !== null);
+if (centroVerde) {
+  await page.mouse.move(centroVerde.x, centroVerde.y);
+  await page.waitForTimeout(450);
+}
+check('sopra una nota verde non si apre nessuna card: il verde non spiega niente',
+  centroVerde !== null && (await page.locator('.ehc-card').count()) === 0);
+await spegniUltimo();
+// come tra ogni stato di pennellata di questa sonda: il mouse va portato via
+// prima di dipingere il giro dopo, perche' un puntatore gia' sopra una testa
+// non innesca nessun pointerover quando quella testa cambia colore.
+await page.mouse.move(5, 5);
+await page.waitForTimeout(250);
 // e allontanando il mouse da una card aperta, la card deve andarsene subito
 await dipingiUnPunto(COLS[1]);
 const centroC = await centroPrimaTestaRossa();
@@ -254,11 +323,33 @@ check('il mouse che se ne va chiude la card: nessuna coda di rettangoli immagina
   await page.locator('.ehc-card').count() === 0);
 await spegniUltimo();
 
-// una foto della coloratura, per guardarla con gli occhi oltre che coi numeri
-await page.evaluate((cols) => {
-  window.__ultimoStato = window.__marks.paint(window.__osmd, cols);
-}, COLS);
+// una foto della coloratura, per guardarla con gli occhi oltre che coi numeri.
+// Il verde sta nella foto insieme ai rossi: la richiesta del 2026-11-10 vuole
+// entrambi i colori sulla stessa partitura, e l'occhio vuole vedere la prova.
+await page.evaluate(({ cols, verdi }) => {
+  window.__ultimoStato = window.__marks.paint(window.__osmd, cols, verdi);
+}, { cols: COLS, verdi: [{ measure: 12, beat: 0, attack: 40 }] });
+// la foto deve mostrare quello che pretende: la finestra viene portata sulla
+// testa VERDE (attacco 40), dove i rossi vicini del piano — attacchi 36 e 45
+// dello stesso COLS — fanno da cornice. Uno screenshot senza il colore che
+// documenta non è la prova di niente: l'occhio vuole vedere verde E rosso
+// nella stessa image, fianco a fianco, come li vedrà l'allievo alla fine di
+// una presa sporca ma non totale.
 await page.waitForTimeout(400);
+await page.evaluate(() => {
+  for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+    let verde = false;
+    for (const p of h.querySelectorAll('path')) {
+      if ((p.getAttribute('fill') || '').toLowerCase() === '#2e7d32') { verde = true; break; }
+    }
+    if (verde) {
+      h.scrollIntoView({ block: 'center', behavior: 'instant' });
+      return true;
+    }
+  }
+  return false;
+});
+await page.waitForTimeout(500);
 await page.screenshot({ path: SHOT, fullPage: false });
 console.log('  foto: ' + SHOT);
 

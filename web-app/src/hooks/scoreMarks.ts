@@ -32,10 +32,13 @@ export interface ScoreLocation {
   attack?: number | null;
   /**
    * I numeri nudi dell'errore, allegati dal servizio dove esistono davvero:
-   * 'pitch' = il tasto premuto e quello scritto, 'velocity' = le due velocita'.
-   * Assenti altrove (jitter, pedale, articolazione): nessuna riga inventata.
+   * 'pitch' = il tasto premuto e quello scritto, 'velocity' = le due velocita',
+   * 'timing' = di quanto un tasto giusto e' arrivato fuori tempo (played =
+   * millisecondi col segno, positivo = in ritardo; lo produce solo la copertura
+   * "out of time" del servizio). Assenti altrove (jitter, pedale, articolazione,
+   * "never played"): nessuna riga inventata.
    */
-  kind?: 'pitch' | 'velocity' | null;
+  kind?: 'pitch' | 'velocity' | 'timing' | null;
   played?: number | null;
   written?: number | null;
 }
@@ -53,7 +56,7 @@ export type VerdictsLike = Record<string, VerdictLike>;
 /** Una regola caduta su un punto, con i suoi numeri quando il servizio li ha. */
 export interface MarkRule {
   name: string;
-  kind?: 'pitch' | 'velocity';
+  kind?: 'pitch' | 'velocity' | 'timing';
   played?: number;
   written?: number;
 }
@@ -68,9 +71,22 @@ export interface MarkColumn {
   rules: MarkRule[];
 }
 
+/** Un attacco scritto che ha suonato il suo pitch giusto, dentro il tempo.
+ *  Lo dichiara il servizio (campo "correct") e la pagina lo tinge di VERDE:
+ *  nessun hover, nessuna spiegazione — il verde non deve dire altro che "li'
+ *  hai fatto la cosa giusta" (richiesta 2026-11-10). */
+export interface GreenSpot {
+  measure: number;
+  beat: number;
+  /** obbligatorio: senza indice da contare la pagina non ha nessuna testa da colorare */
+  attack: number;
+}
+
 export interface MarkPlan {
   /** punti da colorare, in ordine di lettura; l'ordine del cammino e' attack */
   columns: MarkColumn[];
+  /** attacchi puliti da tingere di verde; mai sovrapposti ai rossi, vedi planMarks */
+  green: GreenSpot[];
   /** regole violate che non indicano nessun punto: solo nomi nella riga sotto */
   unpinned: string[];
   /** exit 2: il monitor non e' partito. Mai una nota rossa per questo. */
@@ -91,8 +107,16 @@ export interface MarkPlan {
  * exit 2 NON produce note: il servizio non ha giudicato niente, e una nota
  * rossa sarebbe un'accusa inventata a chi ha suonato. Finisce nell'elenco
  * `broken`, che la pagina dichiara a parte.
+ *
+ * `correct` (richiesta 2026-11-10: "le note premute correttamente fossero
+ * colorate di verde, e tutte le altre di rosso") sono gli attacchi puliti che
+ * il servizio ha ri-ancorato ai tasti premuti. Qui diventano `green`, con la
+ * stessa deduplica dei rossi e ESCLUSI dove un rosso c'e' gia': un punto non
+ * porta due colori, e il rosso vince — se una regola ha qualcosa da ridire
+ * li', "hai premuto giusto" non e' piu' una frase vera. Un verde senza indice
+ * dell'attacco non e' colorabile (la pagina ci arriva contando) e non compare.
  */
-export function planMarks(verdicts: VerdictsLike): MarkPlan {
+export function planMarks(verdicts: VerdictsLike, correct?: ScoreLocation[] | null): MarkPlan {
   const byPos = new Map<string, MarkColumn>();
   const unpinned = new Set<string>();
   const broken: string[] = [];
@@ -124,7 +148,7 @@ export function planMarks(verdicts: VerdictsLike): MarkPlan {
       if (!col.rules.some((r) => r.name === rule)) {
         col.rules.push({
           name: rule,
-          ...(l.kind === 'pitch' || l.kind === 'velocity'
+          ...(l.kind === 'pitch' || l.kind === 'velocity' || l.kind === 'timing'
             ? { kind: l.kind, played: l.played ?? undefined, written: l.written ?? undefined }
             : {}),
         });
@@ -137,8 +161,26 @@ export function planMarks(verdicts: VerdictsLike): MarkPlan {
   const columns = [...byPos.values()].sort(
     (a, b) => a.measure - b.measure || a.beat - b.beat,
   );
+
+  // Il verde passa di qua solo dove il rosso non c'e'. Il servizio l'ha gia'
+  // tolto, qui si ricontrolla: un punto con due colori sarebbe peggio di una
+  // verifica ripetuta, e un attack duplicato non deve colorare due volte.
+  const taken = new Set(
+    columns.map((c) => (c.attack !== null ? `a${c.attack}` : `${c.measure}:${c.beat}`)),
+  );
+  const green: GreenSpot[] = [];
+  for (const l of Array.isArray(correct) ? correct : []) {
+    if (!Number.isInteger(l?.attack)) continue;
+    if (typeof l.beat !== 'number' || typeof l.measure !== 'number') continue;
+    const key = `a${l.attack as number}`;
+    if (taken.has(key)) continue;
+    taken.add(key);
+    green.push({ measure: l.measure, beat: l.beat, attack: l.attack as number });
+  }
+
   return {
     columns,
+    green,
     unpinned: [...unpinned].sort(),
     broken: broken.sort(),
   };
@@ -150,7 +192,7 @@ import { noteName } from './practiceSteps';
 export interface MarkLine {
   rule: string;
   /**
-   * Inglese最短, formato qui perché è testo e la prova sta nel modulo puro:
+   * Inglese, al minimo, formato qui perché è testo e la prova sta nel modulo puro:
    * `you C#4 · score D4` per un tasto, `you 101 · score 84` per una dinamica.
    * Il servizio manda i numeri nudi (`kind`/`played`/`written`): le frasi le
    * scrive una parte sola. Definisca due nomi diversi lo stesso numero in due
@@ -174,7 +216,16 @@ export function markLines(column: MarkColumn): MarkLine[] {
     if (r.kind === 'velocity' && typeof r.played === 'number' && typeof r.written === 'number') {
       return { rule: r.name, detail: `you ${r.played} · score ${r.written}` };
     }
-    return { rule: r.name }; // jitter, pedale, articolazione: nessun numero da mostrare
+    if (r.kind === 'timing' && typeof r.played === 'number') {
+      // "out of time": il numero e' il ritardo col segno, la frase la scrive
+      // qui come per le altre coppie — il servizio passa solo numeri nudi.
+      const ms = Math.abs(Math.round(r.played));
+      return {
+        rule: r.name,
+        detail: `you ${ms} ms ${r.played >= 0 ? 'late' : 'early'} · score on time`,
+      };
+    }
+    return { rule: r.name }; // jitter, pedale, articolazione, never played: nessun numero da mostrare
   });
 }
 

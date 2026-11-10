@@ -270,6 +270,110 @@ def _run_metrics(trace_path, metrics):
     return verdicts
 
 
+# Cio' che le regole RML non possono vedere, e i due numeri che lo decidono.
+# Scelti qui, visibili qui, ritoccabili qui — non dispersioni sparse:
+#   TIMING_TOL_MS  quanto si puo' pressare una nota scritta fuori dal suo
+#                  istante prima che la pagina la chiami "out of time". 200 ms
+#                  e' il confine dove un pianista percepisce "la_sentivo dentro
+#                  il brano" da "stavo cercando il tasto": misurato su prese
+#                  vero del 2026-11-10, il ritardo netto dell'utente era mezzo
+#                  secondo, e la precisione di chi conosce il brano sta sotto
+#                  i 100. Scelta musicale, non un teorema: si tocca qui.
+#   MATCH_CAP_MS   oltre questa distanza dallo stesso tasto scritto la pressione
+#                  non e' piu' "in ritardo": e' un'altra nota, o un'allucinazione
+#                  del rumore. Scala col tempo reale (x tempo_factor), perche' a
+#                  meta' velocita' anche gli intervalli written si allungano.
+TIMING_TOL_MS = 200
+MATCH_CAP_MS = 900
+
+
+def coverage(model, notes, factor):
+    """Ricostruisce la verita' per attacco scritto: udito, in ritardo, mai premuto.
+
+    Due cose le regole RML non possono dirle, e non per negligenza: una riga di
+    traccia nasce solo da un tasto PREMUTO, quindi l'attacco che nessuno ha
+    premuto non produce riga e batch.pl non ha nessun indice da puntare; e il
+    ritardo grossissimo sparisce nello snap di join, che ancora la pressione
+    all'attacco scritto piu' vicino senza chiedere se QUEL tasto c'entrasse —
+    verita' misurata con esperimento nudo (Warmup C Major, 2026-11-10: 500 ms di
+    ritardo su un attacco, deltaMis della riga risultato ~0 perche' la riga era
+    finita sull'attacco dopo).
+
+    Questa funzione ri-àncora sul tasto realmente premuto — il numero premuto
+    contro i pitch attesi di cet'attacco scritto, la sola cerniera onesta tra i
+    due mondi — e per ogni attacco risponde: ogni nota attesa li' fu davvero
+    udita (stesso numero, entro MATCH_CAP_MS per lo stesso tasto, assegnazione
+    golosa dal delta piu' piccolo prima che un vicino si mangi la pressione)?
+    Se si': era dentro TIMING_TOL_MS o no? Restituisce tre liste di punti con
+    LA STESSA grammatica delle locations (measure/beat/attack, qui attack =
+    indice dell'attacco scritto), perche' la pagina li dipinge allo stesso modo.
+
+    Non esclude niente: il chiamante tace "never played" dove una regola RML ha
+    gia' puntato lo stesso punto (la coppia di numeri li' basta e avanza), mentre
+    "out of time" arriva sempre perche' quella verita' nessun'altra regola la
+    dice. Il campo kind/played sul ritardo e' la coppia onesta per la
+    card d'hover: delta col segno in played (positivo = in ritardo), niente
+    written perche' l'istante esatto l'allievo ce l'ha gia' sotto gli occhi
+    nella carta del voto che scorre.
+    """
+    attacks = model.attacks()  # [(beat, [pitch attesi])] in ordine cronologico
+    if not attacks or not notes:
+        return [], [], []
+
+    expect_at = [(model.ms_at(b) * float(factor), sorted(pitches))
+                 for b, pitches in attacks]
+    cap = MATCH_CAP_MS * float(factor)
+
+    cands = []
+    for i, p in enumerate(notes):
+        t = float(p["time_ms"])
+        for k, (ems, pitches) in enumerate(expect_at):
+            if int(p["pitch"]) not in pitches:
+                continue
+            d = t - ems
+            if abs(d) <= cap:
+                cands.append((abs(d), i, k, d))
+    cands.sort()
+
+    covered = {}   # per attack: pitch atteso -> delta firmato del match migliore
+    used_notes = set()
+    for _, i, k, d in cands:
+        if i in used_notes:
+            continue  # questa pressione ha gia' trovato il suo attacco, il piu' vicino
+        pnum = int(notes[i]["pitch"])
+        if pnum in covered.get(k, {}):
+            continue  # quella nota attesa e' gia' udita: la seconda vale come extra altrove
+        used_notes.add(i)
+        covered.setdefault(k, {})[pnum] = d
+
+    late, missed, correct = [], [], []
+    for k, (ems, pitches) in enumerate(expect_at):
+        if not pitches:
+            continue
+        beat, measure = round(attacks[k][0], 4), model.measure_at(attacks[k][0])
+        cov = covered.get(k, {})
+        loc = {"measure": measure, "beat": beat, "attack": k}
+        if any(p not in cov for p in pitches):
+            missed.append(loc)
+            continue  # attacco con buchi: il rosso "never played" copre anche li'
+        worst_d, worst_a = 0.0, 0.0
+        for d in cov.values():
+            if abs(d) > worst_a:
+                worst_a, worst_d = abs(d), d
+        if worst_a > TIMING_TOL_MS:
+            late.append({**loc, "kind": "timing", "played": int(round(worst_d))})
+        else:
+            correct.append(loc)
+    return late, missed, correct
+
+
+def _loc_key(l):
+    """Chiave del punto identica a quella che usera' il frontend: attack se c'e'."""
+    if isinstance(l.get("attack"), int):
+        return "a%d" % l["attack"]
+    return "%s:%s" % (l.get("measure"), l.get("beat"))
+
+
 def _detail_for(rule, ev):
     """I numeri nudi di un punto violato: cosa e' stato suonato, cosa chiedeva lo spartito.
 
@@ -392,14 +496,17 @@ def analyse(body):
         with open(score, "w", encoding="utf-8") as f:
             f.write(body["score"])
         model = ScoreModel.from_musicxml(score)
-        events = join(model, notes, read_tempo_factor(body), cc)
+        factor = read_tempo_factor(body)
+        events = join(model, notes, factor, cc)
         with open(trace, "w", encoding="utf-8") as f:
             f.write(to_jsonl(events) + "\n")
         verdicts = _run_metrics(trace, METRICS)
     finally:
         unlink(score)
         unlink(trace)
-    return verdicts, events
+    # Il model, le note e il fattore viaggiano fuori insieme al verdetto: la
+    # copertura legge la verita' scritta, che vive solo nel model (`coverage`).
+    return verdicts, events, model, notes, factor
 
 
 def practise_step(body):
@@ -549,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/practice/step":
                 return self._send(200, practise_step(body))
 
-            verdicts, events = analyse(body)
+            verdicts, events, model, notes, factor = analyse(body)
             # Su una regola violata viaggiano anche i punti dello spartito: la
             # pagina ci colora di rosso le note e il mouse sopra racconta quali
             # regole sono cascate li'. exit 2 NON produce posizioni: il servizio
@@ -560,9 +667,44 @@ class Handler(BaseHTTPRequestHandler):
                 if v[1] == 1:
                     entry["locations"] = _locations(v[3], events, k)
                 payload[k] = entry
+
+            # Poi vengono le due cose che RML non puo' vedere, e il verde della
+            # presa. I punti rossi gia' rivendicati dalle regole non si accusano
+            # due volte: una nota stonata e' gia' rossa, e aggiungervi "non e'
+            # mai stata suonata" sarebbe una seconda voce che dice la stessa
+            # cosa in un altro modo — la coppia di numeri li' ha gia' detto tutto.
+            late, missed, correct = coverage(model, notes, factor)
+            red = set()
+            for v in payload.values():
+                for l in v.get("locations", []):
+                    red.add(_loc_key(l))
+            # "never played" tace dove un rosso c'e' gia': li' la coppia di
+            # numeri RML ha gia' detto tutto, e una seconda voce che dice
+            # "mancava anche questa" sarebbe rumore sopra la stessa nota.
+            # "out of time" NON si esclude mai: il punto e' rosso comunque, e
+            # la sua riga porta una verita' che nessun'altra riga dice — il
+            # tasto era quello giusto, arrivato male nel tempo. Il voto non
+            # raddoppia: planMarks fonde i punti con la stessa chiave, e due
+            # righe su un errore sono informazioni, non due errori.
+            missed = [l for l in missed if _loc_key(l) not in red]
+            if late:
+                payload["out of time"] = {"ok": False, "exit": 1, "locations": late}
+                red.update(_loc_key(l) for l in late)
+            if missed:
+                payload["never played"] = {"ok": False, "exit": 1, "locations": missed}
+                red.update(_loc_key(l) for l in missed)
+            correct = [l for l in correct if _loc_key(l) not in red]
+
             self._send(200, {
                 "events": len(events),
                 "verdicts": payload,
+                # Il verde della presa: attacchi scritti che hanno suonato il
+                # loro pitch giusto, e dentro il tempo. E' un fatto di copertura
+                # (python riàncora sul tasto premuto), non un verdetto RML: c'e'
+                # anche quando ogni monitor e' rimasto muto, e "giusto" qui vale
+                # intonazione + tempo — se dinamica o pedale hanno detto altro su
+                # quel punto, il punto era gia' rosso e non puo' essere verde.
+                "correct": correct,
                 "stderr": {k: v[2] for k, v in verdicts.items() if v[2].strip()},
             })
         except Exception as e:

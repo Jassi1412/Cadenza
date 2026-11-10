@@ -5,7 +5,7 @@ import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
-import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, summaryLines, type MarkTip } from '../hooks/scoreMarks';
+import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, summaryLines, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
 import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
@@ -217,6 +217,10 @@ function moveCursorToStep(osmd: any, stepIndex: number, fromStep: number): numbe
  * ha una tinta sola: qui non si inventa niente.
  */
 const MARK_RED = '#a0442c';
+/** Il verde delle note giuste: stesso peso cromatico del rosso, e il verde
+ *  che il tema gia' usa per "tutto rispettato" (il #2e7d32 del pannello dei
+ *  verdetti). Nessun hover gli appartiene: deve solo dire "li' ok". */
+const MARK_GREEN = '#2e7d32';
 
 /** Ciò che è stato colorato, per toglierlo quando il verdetto si chiude o la
  *  prova ricomincia: un rosso lasciato addosso alla nota sbagliata GIUSTA
@@ -258,14 +262,15 @@ interface NoteheadHit {
   cx: number;
 }
 
-/** Tinge di rosso una testa di nota. La card dell'hover non si appende qui:
- *  sta nel DOM della pagina, alimentata dalla mappa, per restare nel tema e
- *  morire quando la testa torna pulita. */
-function paintNotehead(head: SVGGElement, state: MarkState): void {
+/** Tinge una testa di nota: rosso dove il verdetto ha colpito, verde dove
+ *  l'esecuzione ha centrato il tasto scritto al momento giusto. La card
+ *  dell'hover non si appende qui: sta nel DOM della pagina, alimentata dalla
+ *  mappa markTips, per restare nel tema e morire quando la testa torna pulita. */
+function paintNotehead(head: SVGGElement, state: MarkState, color: string): void {
   for (const p of head.querySelectorAll<SVGPathElement>('path')) {
     state.paths.push({ el: p, fill: p.getAttribute('fill'), stroke: p.getAttribute('stroke') });
-    p.setAttribute('fill', MARK_RED);
-    p.setAttribute('stroke', MARK_RED);
+    p.setAttribute('fill', color);
+    p.setAttribute('stroke', color);
   }
 }
 
@@ -289,7 +294,7 @@ function paintNotehead(head: SVGGElement, state: MarkState): void {
  * dentro. Se nulla cade sulla riga si dichiara il punto "non raggiunto": meglio
  * una riga sotto che dire "è colpa tua" alla nota del vicino.
  */
-function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
+function paintScoreMarks(osmd: any, columns: MarkColumn[], green?: GreenSpot[]): {
   state: MarkState;
   painted: number;
   firstEl: SVGGElement | null;
@@ -302,10 +307,18 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
 
   // Senza indice dell'attacco non c'è da contare: questi punti finiscono dichiarati,
   // non colorati a caso sul primo che passa.
-  const walk: Array<{ col: MarkColumn; attack: number }> = [];
+  // Rosso e verde viaggiano su UN SOLO cammino: il cursore avanza e non torna
+  // indietro, quindi le due liste si fondono in ordine cronologico. Non stanno
+  // mai sulla stessa fermata — planMarks separa le sovrapposizioni — e ogni
+  // tappa e' o rossa o verde; `col` vale null per le tappe verdi.
+  const walk: Array<{ col: MarkColumn | null; attack: number }> = [
+    ...columns
+      .filter((c) => c.attack !== null && c.attack >= 0)
+      .map((c) => ({ col: c as MarkColumn, attack: c.attack as number })),
+    ...(green ?? []).map((g) => ({ col: null, attack: g.attack })),
+  ];
   for (const c of columns) {
     if (c.attack === null || c.attack < 0) missed.push(...c.rules.map((r) => r.name));
-    else walk.push({ col: c, attack: c.attack });
   }
   // Il cammino procede solo in avanti (il cursore non torna indietro), quindi si
   // visita in ordine cronologico. L'ordine di lettura resta quello del piano.
@@ -320,7 +333,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
     pos = moveCursorToStep(osmd, attack, pos);
     if (pos < attack) {
       // la fermata non c'è (brano più corto del previsto, o iteratore rotto)
-      missed.push(...col.rules.map((r) => r.name));
+      if (col) missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     // moveCursorToStep ha già reso il cursore visibile su questo punto: la sua
@@ -328,7 +341,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
     const img = Array.from(document.querySelectorAll<HTMLElement>('[id^="cursorImg-"]'))
       .find((el) => el.style.display !== 'none');
     if (!img) {
-      missed.push(...col.rules.map((r) => r.name));
+      if (col) missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     const ir = img.getBoundingClientRect();
@@ -351,7 +364,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
       heads.push({ el: h, cx: r.left + r.width / 2 });
     }
     if (!heads.length) {
-      missed.push(...col.rules.map((r) => r.name));
+      if (col) missed.push(...col.rules.map((r) => r.name));
       continue;
     }
 
@@ -375,29 +388,33 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
       }
     }
     if (!best || bestD > accept) {
-      missed.push(...col.rules.map((r) => r.name));
+      if (col) missed.push(...col.rules.map((r) => r.name));
       continue;
     }
 
     // l'accordo intero: tutte le teste alla stessa ascissa della scelta migliore
     const cluster = Math.max(3, gap * 0.3);
     // la card d'hover si prepara UNA per la colonna e vale per tutte le teste
-    // dell'istessa istante: è lo stesso errore visto da due righi
-    const tip = markTipFor(col);
+    // dell'istessa istante: è lo stesso errore visto da due righi. Il verde
+    // non ha niente da raccontare e nella mappa delle punte non ci entra mai:
+    // hoverare una nota verde non deve aprire nessuna card.
+    const tip = col ? markTipFor(col) : null;
     let any = false;
     for (const h of heads) {
       if (Math.abs(h.cx - best.cx) > cluster) continue;
-      paintNotehead(h.el, state);
-      markTips.set(h.el, tip);
+      paintNotehead(h.el, state, col ? MARK_RED : MARK_GREEN);
+      if (col && tip) markTips.set(h.el, tip);
       state.heads.push(h.el);
       any = true;
     }
     if (!any) {
-      missed.push(...col.rules.map((r) => r.name));
+      if (col) missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     painted++;
-    firstEl ??= best.el;
+    // lo scorrimento porta al primo errore, non alla prima nota verde: chi ha
+    // sbagliato deve vedere il proprio errore per primo.
+    if (col) firstEl ??= best.el;
   }
 
   // Il cursore aveva finito di servire: fuori dal playback e fuori dalla pratica
@@ -724,12 +741,20 @@ const ScorePage: React.FC = () => {
   // misurato lì 128 fermate su 128 — perché le altezze fra i due lati non
   // combinano mai (octave-shift; allineamento/_probe_osmd.mjs).
   //
-  // I rossi si cancellano da soli: la dipendenza che riaccende l'effetto a ogni
-  // cambio di verdetto è anche quella che spazza la pennellata prima, quindi un
-  // "Play again" o un "Close" non lasciano accuse della prova precedente.
+  // I colori si cancellano da soli quando arriva un verdetto nuovo: la
+  // dipendenza che riaccende l'effetto è anche quella che spazza la pennellata
+  // prima. "Close" NON cancella più niente (richiesta 2026-11-10: quando si
+  // clicca close si deve poter vedere lo spartito finché non si ricomincia da
+  // capo, azione fatta dall'utente): a portare via i colori ci pensa il reset
+  // che handlePlayAlong fa al riavvio, e un verdetto che torna a null — caso
+  // solo teorico ora — ripulisce comunque la tela dall'effetto stesso.
   const marksRef = useRef<MarkState | null>(null);
   const [markedSpots, setMarkedSpots] = useState(0);
   const [missedRules, setMissedRules] = useState<string[]>([]);
+  // "Close" nasconde la carta centrata e basta: rossi, verdi e punte hover
+  // restano dove sono. Questa bandierina si alza alla crocetta e si abbassa
+  // solo quando una nuova prova parte — nessun altro la tocca.
+  const [cardDismissed, setCardDismissed] = useState(false);
 
   // La card che appare mentre il mouse sta su una nota rossa: coordinate del
   // puntatore e contenuto preso dalla mappa markTips. Niente <title> nativo —
@@ -743,8 +768,8 @@ const ScorePage: React.FC = () => {
     setMissedRules([]);
     setTipHover(null); // il verdetto che si rinnova non deve lasciare una card su una nota ormai scolorita
     if (verdict.status !== 'done' || !verdict.verdicts || isPractice) return;
-    const plan = planMarks(verdict.verdicts);
-    const out = paintScoreMarks(osmdRef.current, plan.columns);
+    const plan = planMarks(verdict.verdicts, verdict.correct);
+    const out = paintScoreMarks(osmdRef.current, plan.columns, plan.green);
     marksRef.current = out.state;
     setMarkedSpots(out.painted);
     setMissedRules(out.missed);
@@ -755,7 +780,7 @@ const ScorePage: React.FC = () => {
       // punteggio arriva da sola davanti agli occhi, dove lo sguardo sta già.
       out.firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [verdict.status, verdict.verdicts, isPractice]);
+  }, [verdict.status, verdict.verdicts, verdict.correct, isPractice]);
 
   /** Il voto 0-100 della carta centrata — lo decide `performanceScore`, qui si legge e basta. */
   const scoreOutcome = useMemo(
@@ -835,13 +860,19 @@ const ScorePage: React.FC = () => {
     player.pause();
     player.rewind();
     midi.clearRecording();
+    // Il referto della prova precedente resta sulla pagina finché l'utente non
+    // ricomincia da capo, e "Play along" E quel riavvio: qui carta, rossi e
+    // verdi se ne vanno insieme (richiesta 2026-11-10). Il voto nuovo non deve
+    // poter accusare la prova due con gli errori della prova uno.
+    verdict.reset();
+    setCardDismissed(false);
     setProgress(0);
     setCount(COUNTDOWN_FROM);
     setPhase('countdown');
     // Il click sul "3" si sente subito: qui c'è ancora il gesto utente che
     // autorizza l'audio, dopo sarà troppo tardi per lo sblocco del contesto.
     playTick(false);
-  }, [isLoading, midi]);
+  }, [isLoading, midi, verdict]);
 
   /**
    * Il countdown tiene premuto il musicista al tastierino, poi parte tutto.
@@ -1307,7 +1338,7 @@ const ScorePage: React.FC = () => {
           non un riquadro da raggiungere col mouse in fondo al foglio (richiesta
           2026-11-10): il numero sale davanti agli occhi, i rossi sulla partitura
           restano visibili dietro e intorno a dirne il dove. */}
-      {!isPractice && verdict.status !== 'idle' && (
+      {!isPractice && verdict.status !== 'idle' && !cardDismissed && (
         <PerformanceCard
           status={verdict.status}
           error={verdict.error}
@@ -1320,7 +1351,7 @@ const ScorePage: React.FC = () => {
               verdict.noteCount,
             )
             : []}
-          onClose={verdict.reset}
+          onClose={() => setCardDismissed(true)}
           onPlayAgain={() => void handlePlayAlong()}
         />
       )}

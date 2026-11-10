@@ -249,6 +249,38 @@ dente.forEach((s, i) => {
 check('il caso dell\'utente, fotogramma per fotogramma: il salto a metà viene ignorato, la fine è colta al primo riavvolgimento',
   !vistaTop && esitoFine === 'rewind' && doveFine === dente.length - 3);
 
+// ─────────── verdi, buchi e ritardi: la copertura che il servizio aggiunge
+// (richiesta 2026-11-10: "le note premute correttamente fossero colorate di
+// verde, e tutte le altre di rosso: note missate, note fuori tempo, note
+// sbagliate"). planMarks riceve la lista "correct" dal trasporto e la arrende
+// a verdi che non pestano nessun rosso; markLines sa leggere il ritardo col
+// segno; performanceScore conta i buchi come qualunque altra macchia.
+const g1 = planMarks({ 'pitch-agreement': V(1, [L(1, 0, 4)]) },
+  [L(1, 2, 5), L(1, 8, 9), L(1, 0, 4)]);
+check('la lista corretta del servizio diventa green, e dove c\'è già un rosso il verde non passa',
+  g1.green.length === 2 && g1.green.every((g) => g.attack !== 4));
+check('un verde senza indice d\'attacco non è colorabile e sparisce dalla lista',
+  planMarks({}, [L(2, 0), L(2, 4, 7)]).green.length === 1);
+check('lo stesso attacco dichiarato corretto due volte viene colorato una volta sola',
+  planMarks({}, [L(3, 0, 6), L(3, 0, 6)]).green.length === 1);
+check('senza lista corretta il piano resta identico a prima: green vuoto, nessuna rottura',
+  planMarks({ 'pitch-agreement': V(1, [L(1, 0, 4)]) }).green.length === 0);
+const rigaTarda = markLines({ measure: 2, beat: 3, attack: 3, rules: [
+  { name: 'out of time', kind: 'timing', played: 500 }] })[0];
+check('la riga del ritardo pesa le parole: 500 ms late, con i numeri che ha dato il servizio',
+  rigaTarda.rule === 'out of time' && rigaTarda.detail === 'you 500 ms late · score on time');
+const rigaPresto = markLines({ measure: 2, beat: 3, attack: 3, rules: [
+  { name: 'out of time', kind: 'timing', played: -320 }] })[0];
+check('dalla parte giusta: arrivare presto non si scrive "late"',
+  rigaPresto.detail === 'you 320 ms early · score on time');
+const noveBuchi = performanceScore({
+  'never played': V(1, Array.from({ length: 9 }, (_, i) => L(5 + Math.floor(i / 2), i, 8 + i))),
+}, 8);
+check('gli attacchi mai premuti contano come macchie piene: metà brano saltato porta il voto a zero',
+  noveBuchi.flagged === 9 && noveBuchi.score === 0);
+check('un "never played" che non arriva a nessun punto resta una colpa comunque, non un silenzio',
+  performanceScore({ 'never played': V(1, []) }, 20).flagged === 1);
+
 console.log('\n' + '='.repeat(58));
 const falliti = esiti.filter(([, ok]) => !ok);
 console.log(esiti.length - falliti.length + '/' + esiti.length + ' controlli passati');

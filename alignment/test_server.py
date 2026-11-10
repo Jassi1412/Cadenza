@@ -359,6 +359,73 @@ try:
         check("nessuna regola e' in errore sulla prova stonata (exit 2)",
               all(v["exit"] != 2 for v in res2["verdicts"].values()))
 
+    # ---- la verita' dell'utente (2026-11-10): a meta' della prova smette di
+    #      premere. Nessun tasto mai premuto non produce nessuna riga di traccia,
+    #      quindi nessun monitor RML puo' puntarli: deve pensarci la copertura,
+    #      e deve nominare QUEGLI attacchi come "never played", col punto giusto.
+    print("\n=== POST / : si smette di suonare a meta', i buchi diventano rossi ===")
+
+    def verdi_rosse_distinte(r):
+        """Nessun attacco del verde compare in una locazione rossa: mai, in nessun verdetto."""
+        rossi = set()
+        for vv in r["verdicts"].values():
+            for ll in (vv.get("locations") or []):
+                if isinstance(ll.get("attack"), int):
+                    rossi.add(ll["attack"])
+        return all(not (isinstance(ll.get("attack"), int) and ll["attack"] in rossi)
+                   for ll in r.get("correct") or [])
+
+    check("la risposta porta la lista verde accanto ai verdetti",
+          isinstance(res2.get("correct"), list))
+    check("il verde della prova stonata non pesta nessun rosso",
+          verdi_rosse_distinte(res2))
+
+    meta = [dict(n) for n in notes][:len(notes) * 3 // 5]
+    res3, ms, err = post("/", {"score": score_xml, "notes": meta,
+                               "control_changes": [], "tempo_factor": 1.0})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la prova fermata a meta' risponde", False)
+    else:
+        npv = res3["verdicts"].get("never played") or {}
+        locs3 = npv.get("locations") or []
+        print("  never played exit %s, %d posizioni in %.0f ms"
+              % (npv.get("exit"), len(locs3), ms))
+        check("gli attacchi fermati a meta' diventano la regola 'never played' con le sue posizioni",
+              npv.get("ok") is False and npv.get("exit") == 1 and len(locs3) > 0)
+        check("ogni buco indica un punto completo: misura, battitura e indice d'attacco",
+              all(isinstance(l.get("measure"), int) and isinstance(l.get("beat"), float)
+                  and isinstance(l.get("attack"), int) for l in locs3))
+        check("il verde della prova a meta' non pesta nessun rosso",
+              verdi_rosse_distinte(res3))
+
+    # ---- e l'altra metà della denuncia: nota GIUSTA ma con mezzo secondo di
+    #      ritardo. Nello snap di join quella pressione risultava in tempo quasi
+    #      perfetto sull'attacco vicino (verita' misurata); la copertura la
+    #      riacciuffa sul tasto che ha davvero premuto e ne scrive il ritardo,
+    #      col segno, sulla posizione giusta.
+    print("\n=== POST / : mezzo secondo di ritardo su una nota ===")
+    in_ritardo = [dict(n) for n in notes]
+    bersaglio = min(40, len(in_ritardo) - 1)
+    in_ritardo[bersaglio]["time_ms"] += 500.0
+    res4, ms, err = post("/", {"score": score_xml, "notes": in_ritardo,
+                               "control_changes": [], "tempo_factor": 1.0})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la prova in ritardo risponde", False)
+    else:
+        otm = res4["verdicts"].get("out of time") or {}
+        locs4 = otm.get("locations") or []
+        print("  out of time exit %s, %d posizioni in %.0f ms"
+              % (otm.get("exit"), len(locs4), ms))
+        check("la nota giusta fuori tempo diventa la regola 'out of time'",
+              otm.get("ok") is False and otm.get("exit") == 1 and len(locs4) > 0)
+        check("il ritardo arriva come numero col segno, kind timing e non sotto la soglia",
+              any(isinstance(l.get("played"), int) and l.get("kind") == "timing"
+                  and abs(l["played"]) >= 150 for l in locs4))
+        check("il verde della prova in ritardo non pesta nessun rosso",
+              verdi_rosse_distinte(res4))
+
     # ---- la traccia pulita non deve MAI colorare niente: se una regola e'
     #      conforme la caccia agli indici non parte nemmeno, quindi niente
     #      falsi allarmi su chi ha suonato bene.
