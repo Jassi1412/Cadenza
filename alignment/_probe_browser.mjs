@@ -22,7 +22,28 @@
  * di passi del brano — 128 pieno, 88 a mano sinistra, misurati in produzione — si
  * legge dalla risposta `/practice`, intercettata PRIMA del clic sul pulsante.
  *
+ * Dal 2026-11-10 il probe chiude anche una presa Play along VERA (sezione 1b),
+ * che prima non aveva mai toccato: note finte dalla porta finta, e misura dal
+ * vivo il TEMPO fra la prima volta che la barra di avanzamento tocca la cima e
+ * la richiesta al monitor — la garanzia che l'utente ha chiesto ("una volta
+ * concluso lo spartito... mandare subito l'esecuzione al monitor", niente
+ * secondo giro). Testimone nudo: il Resource Timing della POST, cronometrato
+ * nella stessa timeline dei campioni.
+ *
+ * Dottrina operativa pagata in falsi allarmi (2026-11-10): MENTRE questo probe
+ * gira, NON si tocca nessun file sotto web-app/ — nemmeno un .md: Vite trata i
+ * file fuori dal grafo come Reload della pagina, e un reload di mezzo brucia lo
+ * stato di React e fa cadere le sezioni successive con attese che scadono. Le
+ * modifiche ai sorgenti si fanno PRIMA di lanciarlo (Vite ha già ricompilato)
+ * o DOPO che ha scritto il suo JSON.
+ *
  * Uso: node alignment/_probe_browser.mjs
+ *      PROBE_API=http://127.0.0.1:8139 → dove origliare le richieste (deve
+ *      essere la STESSA origine a cui parla la pagina, vedi pages/AGENTS.md).
+ *      SKIP_TAKE=1 → salta l'intera sezione 1b della presa. È lo strumento
+ *      della bisettrice usata il 2026-11-10 (fallivano le sezioni dopo la
+ *      presa: colpa del take o del codice?), non una modalità normale: di
+ *      default la presa si fa, è l'unica prova del "chiude al primo giro".
  */
 import { chromium } from 'file:///C:/Users/Power/AppData/Local/npm-cache/_npx/e41f203b7505f1fb/node_modules/playwright-core/index.mjs';
 import fs from 'node:fs';
@@ -182,6 +203,102 @@ try {
   check('OSMD ha gia\' disegnato il cursore', prima !== null,
     prima ? `left=${prima.left} top=${prima.top} visibile=${prima.vis}` : 'nessun elemento');
 
+  // ── 1b. il Play along: la fine deve essere LA prima volta ──────────
+  // Strumento diagnostico temporaneo (2026-11-10): con SKIP_TAKE=1 l'intera
+  // sezione viene saltata, per rispondere alla bisettrice — se le sezioni dopo
+  // falliscono anche senza la presa, il difetto e' nel codice spedito; se
+  // passono tutte, disturba la sezione stessa. NON e' dottrina: di default la
+  // presa si fa, perche' e' l'unica prova che il take chiude al primo giro.
+  if (!process.env.SKIP_TAKE) {
+  // Lagnanza dell'utente (2026-11-10, verbatim): "una volta concluso lo
+  // spartito riparte da capo invece di mandare subito l'esecuzione al
+  // monitor... l'ho testato con spartiti che non hanno un loop". La presa
+  // non era MAI stata provata dal probe — le sezioni successive stanno tutte
+  // dentro la pratica. Qui si chiude quel buco: si avvia un Play along vero,
+  // con note finte che arrivano dalla porta MIDI finta (l'app non sa di essere
+  // osservata: useMidi registra e useVerdict parte da solo), e si misura il
+  // TEMPO fra la prima volta che la barra di avanzamento tocca la cima e la
+  // richiesta al monitor. La barra è il testimone giusto: `setProgress((pos/
+  // dur)*100)` scrive lo stesso numero che endSignal legge, un fotogramma
+  // prima della regola, senza toccare niente dentro React. E se il brano
+  // ripartiva davvero (il bug), fra cima e richiesta ci starebbe un secondo
+  // giro intero del brano, non tre secondi.
+  const presaPrima = richieste.filter((r) => r === 'POST /').length;
+  await page.evaluate(`(() => {
+    window.__ttrace = { campioni: [], richiesta: null };
+    const cerca = () => performance.getEntriesByType('resource').find((e) =>
+      e.initiatorType === 'fetch' && e.name.includes(':${API_PORT}') && !e.name.includes('/practice'));
+    const traccia = () => {
+      const fill = document.querySelector('.bar-progress-fill');
+      window.__ttrace.campioni.push([performance.now(), fill ? parseFloat(fill.style.width) || 0 : 0]);
+      const r = cerca();
+      if (r) { window.__ttrace.richiesta = r.startTime; return; }
+      requestAnimationFrame(traccia);
+    };
+    requestAnimationFrame(traccia);
+  })()`);
+  await page.click('#bar-practice-btn');
+  // Note finte a palate durante la presa: non serve che siano la melodia,
+  // serve che il recording non sia vuoto e che il verdetto arrivi giudicato.
+  const piovasco = await page.evaluate(() => {
+    window.__piovasco = setInterval(() => {
+      const p = 40 + Math.floor(Math.random() * 48);
+      window.__press(p, 70 + Math.floor(Math.random() * 40), 200);
+    }, 1500);
+    return true;
+  });
+  let presaChiusa = false;
+  const orologioPresa = Date.now();
+  while (Date.now() - orologioPresa < 130000) {
+    await page.waitForTimeout(1000);
+    if (richieste.filter((r) => r === 'POST /').length > presaPrima) { presaChiusa = true; break; }
+  }
+  check('il Play along chiede il verdetto quando lo spartito finisce', presaChiusa,
+    presaChiusa ? '' : `${Math.round((Date.now() - orologioPresa) / 1000)} s in attesa, nessuna POST /`);
+  await page.evaluate(() => clearInterval(window.__piovasco));
+  // La POST vive già nel registro richieste del browser, ma la voce di
+  // Resource Timing compare solo quando la risposta arriva (~170 ms locali).
+  // Analizzare prima di quel momento legge "ricerca non registrata" ed è la
+  // race che ha fatto fallire questi due controlli il 2026-11-10 alla loro
+  // primissima esecuzione, pur con la presa chiusa correttamente.
+  await page.waitForFunction(() => window.__ttrace && window.__ttrace.richiesta != null,
+    null, { timeout: 20000 }).catch(() => {});
+  const analisiPresa = await page.evaluate(() => {
+    const tr = window.__ttrace;
+    if (!tr || tr.richiesta == null) return null;
+    const c = tr.campioni;
+    let iTop = -1;
+    for (let i = 0; i < c.length; i++) { if (c[i][1] >= 97) { iTop = i; break; } }
+    if (iTop < 0) return { campioni: c.length, cima: null };
+    let minimo = 100;
+    for (let i = iTop; i < c.length && c[i][0] <= tr.richiesta; i++) {
+      if (c[i][1] < minimo) minimo = c[i][1];
+    }
+    return { campioni: c.length, cima: c[iTop][0], ritardo: tr.richiesta - c[iTop][0], minimoDaCima: minimo };
+  });
+  check('la fine è colta al primo arrivo: il monitor viene chiamato entro 3 s dalla cima',
+    analisiPresa != null && analisiPresa.cima != null &&
+    analisiPresa.ritardo <= 3000 && analisiPresa.ritardo > -2000,
+    analisiPresa == null ? 'traccia mancante o richiesta non registrata'
+      : analisiPresa.cima == null ? 'nessun campione ≥ 97% prima della richiesta'
+      : `ritardo ${Math.round(analisiPresa.ritardo)} ms su ${analisiPresa.campioni} campioni`);
+  check('dopo la cima non c’è nessun secondo giro: la barra non ridiscende',
+    analisiPresa != null && analisiPresa.cima != null && analisiPresa.minimoDaCima >= 85,
+    analisiPresa == null ? '' : `minimo dopo la cima: ${Math.round(analisiPresa.minimoDaCima)}%`);
+  await page.waitForSelector('.pc-card', { timeout: 15000 }).catch(() => {});
+  const cartaBox = await page.locator('.pc-card').first().boundingBox().catch(() => null);
+  check('la carta del voto sta al centro della finestra, non la si deve cercare',
+    cartaBox != null &&
+    Math.abs(cartaBox.x + cartaBox.width / 2 - 720) <= 108 &&
+    Math.abs(cartaBox.y + cartaBox.height / 2 - 450) <= 135,
+    cartaBox ? `box ${Math.round(cartaBox.x)},${Math.round(cartaBox.y)} ${Math.round(cartaBox.width)}x${Math.round(cartaBox.height)}` : 'nessuna .pc-card');
+  await page.screenshot({ path: path.join(SHOTS, 'presa-voto.png'), fullPage: false });
+  await page.click('.pc-card button:has-text("Close")');
+  await page.waitForSelector('.pc-card', { state: 'detached', timeout: 8000 }).catch(() => {});
+  check('il "Close" della carta ripulisce tutto',
+    await page.locator('.pc-card').count() === 0);
+  } // ── fine sezione 1b (saltabile con SKIP_TAKE=1) ────────────────────
+
   // ── 2. entrare in pratica ───────────────────────────────────────
   console.log('\n2. Entro nella modalita practice');
   // Il piano di risposta va intercettato PRIMA del clic: e' l'ultima cosa che dice
@@ -264,22 +381,46 @@ try {
     return nomi.length >= 6 && !etichette.includes('D4') && !etichette.includes('G4');
   })(), `${etichette.length} etichette: ${etichette.join(' ')}`);
 
-  // Le tre regole che qui non si applicano non stanno piu' in un <details>: stanno
-  // nel titolo del pulsante tastiera. Se sparissero del tutto, il silenzio della
-  // striscia si leggerebbe "correct", che e' la bugia questo progetto non vuole mai
-  // dire — e ora la riga non ha nemmeno una parola, quindi il rischio e' piu' grande.
-  const titolo = (await page.getAttribute('#bar-keys-btn', 'title')) ?? '';
-  const sospese = ['articulation', 'pedal-toggle', 'syncopated-pedal']
-    .filter((n) => titolo.includes(n));
-  check('le regole che non si applicano restano dichiarate nel titolo',
-    sospese.length === 3, `${sospese.length}/3 — ${titolo.replace(/\s+/g, ' ').slice(0, 80)}`);
-  check('il titolo dice anche passo, battuta e tasti, che la riga non mostra piu\'',
-    /Step \d+ of \d+/.test(titolo) && /bar \d+/.test(titolo) && /press /.test(titolo),
-    titolo.replace(/\s+/g, ' ').slice(0, 90));
+   // Niente più rettangolini nativi su nessuno dei quattro comandi: richiesta
+  // esplicita del 2026-11-10 ("compaiono di nuovo i rettangolini css sull'hover
+  // che descrivono cosa sono, non li voglio, eliminali"). Le informazioni che
+  // stavano lì ora vivono SOLO dove si guardano: i tasti d'oro sulla tastiera
+  // disegnata dicono cosa premere, il viola dell'altro rigo dice cosa è escluso.
+  // Quel che resta da garantire è l'accessibilità senza rettangolo: il nome del
+  // pulsante deve stare nell'aria-label, che lo screen reader lo legge e il
+  // mouse no. Se un title ricomparisse, la verifica urla.
+  const titoliComandi = await page.evaluate(() =>
+    ['#bar-keys-btn', '#bar-hand-left', '#bar-hand-right', '#bar-dyn-btn']
+      .map((s) => document.querySelector(s)?.hasAttribute('title') ?? null));
+  check('nessun comando della striscia porta il tooltip nativo',
+    titoliComandi.every((t) => t === false), JSON.stringify(titoliComandi));
+  const nomiAccessibili = await page.evaluate(() =>
+    ['#bar-keys-btn', '#bar-hand-left', '#bar-hand-right', '#bar-dyn-btn']
+      .map((s) => (document.querySelector(s)?.getAttribute('aria-label') ?? '').trim()));
+  check('i comandi restano pronunciabili per lo screen reader: etichetta su tutti',
+    nomiAccessibili.every((n) => n.length > 0), JSON.stringify(nomiAccessibili));
 
   // ── 3. quanto spazio occupa, e dove sta? ─────────────────────────
   console.log('\n3. Quanto spazio occupano striscia e tastiera?');
-  const lay = await page.evaluate(() => {
+  const lay = await page.evaluate(async () => {
+    // Misurare solo quando le due superfici fisse hanno SMESSO di muoversi:
+    // striscia e tastiera entrano con un'animazione CSS, e leggere un fotogramma
+    // in movimento produce sovrapposizioni false — la misura bottom=812 del run
+    // 2026-11-10 era una striscia in discesa, da ferma e' ~786 su pillola 796.
+    await new Promise((resolve) => {
+      let firmaPrecedente = '', fotogrammiUguali = 0;
+      const t0 = performance.now();
+      const conta = () => {
+        if (!document.querySelector('.practice-bar') || performance.now() - t0 > 8000) { resolve(); return; }
+        const s = document.querySelector('.practice-bar').getBoundingClientRect().bottom;
+        const k = document.querySelector('.piano-kbd');
+        const firma = Math.round(s) + '|' + (k ? Math.round(k.getBoundingClientRect().bottom) : 'x');
+        if (firma === firmaPrecedente) { if (++fotogrammiUguali >= 6) { resolve(); return; } }
+        else { fotogrammiUguali = 0; firmaPrecedente = firma; }
+        requestAnimationFrame(conta);
+      };
+      requestAnimationFrame(conta);
+    });
     const striscia = document.querySelector('.practice-bar');
     const pillola = document.querySelector('#playback-bar');
     const kbd = document.querySelector('.piano-kbd');
@@ -332,13 +473,13 @@ try {
   const dyn = page.locator('#bar-dyn-btn');
   check('il toggle della dinamica esiste', await dyn.count() === 1);
   check('parte acceso', (await dyn.getAttribute('aria-pressed')) === 'true');
-  const dynPrima = (await dyn.getAttribute('title')) ?? '';
   const retiPrima = richieste.length;
   await dyn.click();
   check('cliccandolo si spegne', (await dyn.getAttribute('aria-pressed')) === 'false');
-  const dynDopo = (await dyn.getAttribute('title')) ?? '';
-  check('spento dice cosa non si guarda piu\'',
-    /Dynamics off/.test(dynDopo) && dynPrima !== dynDopo, dynDopo.slice(0, 70));
+  // Il title non deve tornare a riempirsi di frasi a ogni stato: i rettolini
+  // nativi sono eliminati per richiesta (2026-11-10), anche sul chip D.
+  check('spento non si riporta dietro il rettangolo nativo',
+    (await dyn.getAttribute('title')) === null);
   // Il contratto vero, misurato sulle richieste: la dinamica filtra la VISTA, non la
   // richiesta. Un click che costa un giro di rete renderebbe il giudizio del servizio
   // dipendente dall'interfaccia, e sarebbe la prima volta in questo progetto.
@@ -407,10 +548,25 @@ try {
   // Una parola sola al posto di quattro righe. Il viola "cannot verify" e' il
   // monitor che non e' partito: qui non deve comparire, perche' il servizio gira.
   console.log('\n6. Il verdetto del servizio');
-  await page.waitForFunction(() => {
+  // Il timeout qui NON deve più uccidere la corsa: nel 2026-11-10 lo stesso
+  // schianto silenzioso ha bruciato tre run prima di far vedere una sola prova.
+  // Se la parola non arriva, si fotografa la scena (com'è fatto #practice-problem,
+  // cosa dice la riga, gli errori della pagina) e si prosegue con la check marcata
+  // fallita: le sezioni dopo valgono comunque, e il JSON degli esiti le racconterà.
+  const parolaPronta = await page.waitForFunction(() => {
     const p = document.querySelector('#practice-problem');
     return p && /correct/.test(p.textContent);
-  }, null, { timeout: 45000 });
+  }, null, { timeout: 30000 }).then(() => true).catch(() => false);
+  if (!parolaPronta) {
+    const scena = await page.evaluate(() => ({
+      span: document.querySelector('#practice-problem')?.outerHTML.slice(0, 260) ?? null,
+      riga: document.querySelector('.practice-bar')?.innerText.replace(/\s+/g, ' ') ?? null,
+      striscia: !!document.querySelector('.practice-bar'),
+    })).catch((e) => ({ evaluateFallito: String(e).slice(0, 120) }));
+    console.log('     scena verdetto: ' + JSON.stringify(scena));
+    const erroriVividi = log.filter((l) => l.startsWith('[pageerror]') || l.includes('[Error]')).slice(-4);
+    if (erroriVividi.length) console.log('     errori pagina: ' + erroriVividi.join(' ||| '));
+  }
   const chip = ((await page.textContent('#practice-problem')) ?? '').trim().replace(/\s+/g, ' ');
   const classiChip = (await page.getAttribute('#practice-problem', 'class')) ?? '';
   check('il verdetto arriva e dice "correct"', /correct/.test(chip), chip);
@@ -559,9 +715,10 @@ try {
   check('il tasto ignorato si vede spento-viola sulla tastiera, non rosso',
     violaSx.includes(esclusoSx[0]),
     `esclusi=[${esclusoSx}] rossi=${JSON.stringify(await page.$$eval('.pk-extra', (ks) => ks.map((k) => k.dataset.pitch)))}`);
-  const titoloDopoEsclusa = (await page.getAttribute('#bar-keys-btn', 'title')) ?? '';
-  check('e la striscia lo dichiara nel titolo, senza contarla come errore',
-    /other staff/i.test(titoloDopoEsclusa), titoloDopoEsclusa.replace(/\s+/g, ' ').slice(0, 100));
+  const probTitolo = await page.evaluate(() =>
+    document.querySelector('#practice-problem')?.hasAttribute('title') ?? false);
+  check('e la striscia non lo ri-spiega col rettangolo nativo: viola basta, e non è un errore',
+    probTitolo === false);
   // La parolina del verdetto NON c'è quando non c'è niente da dire (pressione
   // dell'escluso: nessun tasto studiato premuto, il servizio risponde `verdicts: {}`
   // e la riga resta senza parole). L'elemento quindi puo' non esserci DEL TUTTO:
@@ -697,7 +854,58 @@ try {
     righiRipresa.sopra.grigi === 0 && righiRipresa.sotto.grigi === righiRipresa.sotto.n,
     JSON.stringify(righiRipresa));
 
-  // ── 11. uscire dalla pratica ──────────────────────────────────
+  // ── 11. le scelte della striscia non si resettano ───────────────
+  // Richiesta del 2026-11-10: "se la disattivo e faccio ripartire da capo il
+  // brano ricompare di nuovo, lo stesso vale per L e R ... rendile persistenti,
+  // non si devono resettare a meno che non lo scelga l'utente". Qui lo stato di
+  // uscita dalla sezione 10 è: L spenta e R accesa, tastiera aperta. Si chiude
+  // la tastiera DI DENTRO la pratica — e al rientro si deve trovare esattamente
+  // così: lettera spenta dov'era, tastiera chiusa com'era stata lasciata. Non
+  // c'è più nessun reset "a tutte e due le mani" che la pagina fa di testa sua.
+  // Questa sezione ENTRA ed ESCE dalla pratica per conto suo; lascia la pagina
+  // DENTRO la pratica, nello stato che la sezione 12 ("uscire") si aspetta.
+  await page.click('#bar-keys-btn');
+  await page.waitForFunction(() => document.querySelectorAll('.piano-kbd').length === 0,
+    null, { timeout: 8000 }).catch(() => {});
+  check('il click sul pianoforte chiude la tastiera quando è l' + '\'utente a volerlo',
+    await page.locator('.piano-kbd').count() === 0);
+  await page.click('#bar-step-btn');                  // esce
+  await page.waitForSelector('.practice-bar', { state: 'detached', timeout: 15000 });
+  const maniGiustePrima = richieste.filter((r) => r === 'POST /practice "hand":"right"').length;
+  await page.click('#bar-step-btn');                  // e rientra in pratica
+  await page.waitForSelector('#bar-keys-btn', { timeout: 20000 });
+  await page.waitForFunction(
+    () => ((document.querySelector('#bar-hand-left')?.className ?? '').includes('pb-chip-off')),
+    null, { timeout: 15000 }).catch(() => {});
+  const sxRientro = await page.evaluate(() => (document.querySelector('#bar-hand-left')?.className ?? ''));
+  check('rientrando la lettera L resta spenta dove l' + '\'aveva lasciata chi suona',
+    sxRientro.includes('pb-chip-off'), sxRientro);
+  const dxRientro = await page.evaluate(() => (document.querySelector('#bar-hand-right')?.className ?? ''));
+  check('e la lettera R resta accesa com' + '\'era', dxRientro.includes('pb-chip-on'), dxRientro);
+  // La tastiera è il caso citato per primo dall'utente: chiusa a mano, non deve
+  // riaprirsi da sola alla sessione successiva.
+  check('la tastiera di richiamo non è riapparsa per conto suo',
+    await page.locator('.piano-kbd').count() === 0);
+  // Se L è spenta, il piano giusto a cui tornare è quello della destra: lo
+  // chiede l'effetto che confronta interruttori e piano in carica, non una
+  // ripartenza-di-testa della pagina. La prova sta nel traffico — un POST
+  // /practice con "hand":"right" che parte da solo entro pochi secondi dal
+  // rientro. Non si aspetta la tastiera disegnata: è chiusa per scelta
+  // dell'utente, e quello che deve succedere succede comunque.
+  let ripartenzaGiusta = false;
+  for (let i = 0; i < 40 && !ripartenzaGiusta; i++) {
+    await page.waitForTimeout(500);
+    ripartenzaGiusta =
+      richieste.filter((r) => r === 'POST /practice "hand":"right"').length > maniGiustePrima;
+  }
+  check('e l' + '\'esercizio riparte dalla mano scelta, non dal brano intero',
+    ripartenzaGiusta, `richieste piano: ${richieste.filter((r) => r.startsWith('POST /practice')).slice(-3).join(' | ')}`);
+  const prefsSalvate = await page.evaluate(() => localStorage.getItem('cadenza-practice-controls'));
+  check('la scelta è salvata anche nel browser, per il caricamento successivo',
+    /"left":\s*false/.test(prefsSalvate ?? '') && /"kb":\s*false/.test(prefsSalvate ?? ''),
+    String(prefsSalvate).slice(0, 80));
+
+  // ── 12. uscire dalla pratica ──────────────────────────────────
   console.log('\n10. Esco dalla pratica');
   await page.screenshot({ path: path.join(SHOTS, 'practice.png'), fullPage: false });
   await page.click('#bar-step-btn');
@@ -717,6 +925,7 @@ try {
   check('uscire dalla pratica restituisce il colore a tutti i righi',
     righiFuori.sopra.grigi === 0 && righiFuori.sotto.grigi === 0,
     JSON.stringify(righiFuori));
+
 
   console.log('\nrichieste al servizio: ' + richieste.join(' '));
   const eccezioni = log.filter((l) => l.startsWith('[pageerror]'));

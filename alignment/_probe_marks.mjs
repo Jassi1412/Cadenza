@@ -1,19 +1,28 @@
 /**
  * LA SONDA DEI ROSSI: verifica in un browser vero (Chromium via CDP) che la
- * coloratura dei punti sbagliati trovi DAVVERO le note giuste, che il tooltip
- * porti i nomi delle regole e che si possa spegnere tutto senza lasciare segni.
+ * coloratura dei punti sbagliati trovi DAVVERO le note giuste, che il mouse su
+ * una testa rossa tiri fuori la card con i nomi e le coppie premuto/scritto, e
+ * che si possa spegnere tutto senza lasciare segni.
  *
  * Perche' una sonda e non un test unitario: `paintScoreMarks` sceglie le teste
  * di nota con la GEOMETRIA (la perpendicolare della riga del cursore), e la
  * geometria esiste solo dove c'e' un font musicale caricato e un rigo disegnato.
- * Su node non c'e' nulla da misurare. Qui invece ogni numero che decide ("l'unica
- * testa a 40px dalla riga", "il tooltip dice due regole") lo legge il DOM vero.
+ * Su node non c'e' nulla da misurare. Qui ogni numero che decide ("l'unica testa
+ * a 40px dalla riga", "la card dice due regole") lo legge il DOM vero, e il mouse
+ * VERO (page.mouse.move) prova l'ascoltatore sulla finestra + la WeakMap: un jsdom
+ * con i dispatch sintetici non dimostra che il puntatore reale trova la testa.
+ *
+ * Dal 2026-11-10 la pretesa sui tooltip e' ROVESCIATA: prima si assertiva CHE
+ * il `<title>` ci fosse, ora si asserisce che NON c'e' piu' su nessuna testa
+ * (richiesta esplicita: i rettolini nativi sono banditi), e la sostituzione -
+ * ErrorHoverCard - viene provata muovendo il mouse sul DOM dipinto.
  *
  * La sonda NON passa dal servizio: costruisce iniettando le colonne come le
- * produrrebbe `planMarks` (attacco + nomi) e chiama la funzione di pittura
- * direttamente, perche' cio' che va misurato e' il ponte attacco→nota, non la
- * rete. L'iniezione sostituisce il sorgente servito da vite con un accessorio
- * `window.__marks` in piu', niente altro (stesso trucco di _probe_osmd.mjs).
+ * produrrebbe `planMarks` (attacco + MarkRule con i numeri, dove ci sono) e
+ * chiama la funzione di pittura direttamente, perche' cio' che va misurato e'
+ * il ponte attacco→nota e il mouse→card, non la rete. L'iniezione sostituisce
+ * il sorgente servito da vite con un accessorio `window.__marks` in piu',
+ * niente altro (stesso trucco di _probe_osmd.mjs).
  *
  * Uso:  node alignment/_probe_marks.mjs      (vite dev su 5173)
  */
@@ -61,22 +70,28 @@ await page.waitForFunction(() => !!(window).__osmd && !!(window).__marks, null, 
 await page.waitForTimeout(1200);
 
 /**
- * Undici punti sparsi per il primo giro del brano, piu' i nomi da dichiarare.
- * Gli attacchi sono gli INDICI ASSOLUTI dello spartito completo (128 nel primo
- * giro), come li manda il servizio tramite `chordId`.
+ * Undici punti sparsi per il primo giro del brano. Gli attacchi sono gli INDICI
+ * ASSOLUTI dello spartito completo (128 nel primo giro), come li manda il
+ * servizio tramite `chordId`; le regole sono MarkRule come le produce planMarks,
+ * con la coppia di numeri dove il servizio la porta (attacco 0: pitch 62 su
+ * scritto 64; attacco 3: velocity 101 su scritto 84). Quei due attacchi sono
+ * anche i due che la sezione hover va a pescare, da soli.
  */
 const COLS = [
-  { measure: 1, beat: 0, attack: 0, rules: ['pitch-agreement'] },
-  { measure: 2, beat: 1, attack: 3, rules: ['dynamics-adherence', 'chord-jitter'] },
-  { measure: 3, beat: 0, attack: 8, rules: ['articulation'] },
-  { measure: 5, beat: 1, attack: 17, rules: ['pitch-range'] },
-  { measure: 10, beat: 0, attack: 36, rules: ['syncopated-pedal', 'pedal-toggle'] },
-  { measure: 12, beat: 1, attack: 45, rules: ['dynamics-adherence'] },
-  { measure: 15, beat: 0, attack: 60, rules: ['pitch-agreement'] },
-  { measure: 19, beat: 0, attack: 72, rules: ['chord-jitter'] },
-  { measure: 23, beat: 2, attack: 90, rules: ['articulation', 'pitch-range'] },
-  { measure: 28, beat: 2, attack: 110, rules: ['syncopated-pedal'] },
-  { measure: 32, beat: 3, attack: 127, rules: ['pitch-agreement', 'dynamics-adherence'] },
+  { measure: 1, beat: 0, attack: 0, rules: [{ name: 'pitch-agreement', kind: 'pitch', played: 62, written: 64 }] },
+  { measure: 2, beat: 1, attack: 3, rules: [
+    { name: 'dynamics-adherence', kind: 'velocity', played: 101, written: 84 },
+    { name: 'chord-jitter' },
+  ] },
+  { measure: 3, beat: 0, attack: 8, rules: [{ name: 'articulation' }] },
+  { measure: 5, beat: 1, attack: 17, rules: [{ name: 'pitch-range' }] },
+  { measure: 10, beat: 0, attack: 36, rules: [{ name: 'syncopated-pedal' }, { name: 'pedal-toggle' }] },
+  { measure: 12, beat: 1, attack: 45, rules: [{ name: 'dynamics-adherence' }] },
+  { measure: 15, beat: 0, attack: 60, rules: [{ name: 'pitch-agreement' }] },
+  { measure: 19, beat: 0, attack: 72, rules: [{ name: 'chord-jitter' }] },
+  { measure: 23, beat: 2, attack: 90, rules: [{ name: 'articulation' }, { name: 'pitch-range' }] },
+  { measure: 28, beat: 2, attack: 110, rules: [{ name: 'syncopated-pedal' }] },
+  { measure: 32, beat: 3, attack: 127, rules: [{ name: 'pitch-agreement' }, { name: 'dynamics-adherence' }] },
 ];
 
 const esito = await page.evaluate(async ([cols, red]) => {
@@ -91,23 +106,20 @@ const esito = await page.evaluate(async ([cols, red]) => {
   out.painted = pittura.painted;
   out.missed = pittura.missed;
 
-  // quante teste sono diventate rosse, e con quali nomi sopra
-  const rosse = [];
-  const titoli = [];
+  // quante teste sono diventate rosse — e soprattutto: NESSUNA deve avere il
+  // `<title>`, il rettangolo nativo che l'utente ha bandito nel 2026-11-10
+  let rosse = 0;
   for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
     let rossa = false;
     for (const p of h.querySelectorAll('path')) {
       if ((p.getAttribute('fill') || '').toLowerCase() === red) { rossa = true; break; }
     }
-    if (!rossa) continue;
-    rosse.push(h);
-    const t = h.querySelector('title');
-    titoli.push(t ? t.textContent : null);
+    if (rossa) rosse++;
   }
   out.testeTotalePrima = primaTeste;
-  out.testeRosse = rosse.length;
-  out.rosseMenoDelleTotali = primaTeste > rosse.length && rosse.length >= cols.length;
-  out.titoli = [...new Set(titoli.filter(Boolean))].sort();
+  out.testeRosse = rosse;
+  out.rosseMenoDelleTotali = primaTeste > rosse && rosse >= cols.length;
+  out.titoliNativi = document.querySelectorAll('#sheet-container g.vf-notehead title').length;
 
   // il cursore deve essere tornato nascosto: fuori dalla pratica e dal playback
   // non deve indicare niente
@@ -115,7 +127,7 @@ const esito = await page.evaluate(async ([cols, red]) => {
     .some((el) => el.style.display !== 'none');
   out.cursoreNascostoDopo = !imgVisibile;
 
-  // spegnere tutto: nessun rosso, nessun title, e il nero di prima e' tornato
+  // spegnere tutto: nessun rosso, e il nero di prima e' tornato
   for (const s of statiPittura) window.__marks.clear(s);
   let restanoRosse = 0;
   for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
@@ -124,14 +136,13 @@ const esito = await page.evaluate(async ([cols, red]) => {
     }
   }
   out.restanoRosseDopoClear = restanoRosse;
-  out.restanoTitoliDopoClear = document.querySelectorAll('#sheet-container g.vf-notehead title').length;
   const unaTesta = document.querySelector('#sheet-container g.vf-notehead path');
   out.neroTornato = !!unaTesta && (unaTesta.getAttribute('fill') || '').toLowerCase() !== red;
 
   // l'attacco che non esiste non deve accusare la nota piu' vicina che capita:
   // chi non arriva alla fermata dichiara il punto "non raggiunto", non colora
   const out2 = window.__marks.paint(osmd, [
-    { measure: 99, beat: 0, attack: 999, rules: ['pitch-agreement'] },
+    { measure: 99, beat: 0, attack: 999, rules: [{ name: 'pitch-agreement' }] },
   ]);
   out.fuoriAttaccoPainted = out2.painted;
   out.fuoriAttaccoMissed = out2.missed;
@@ -145,19 +156,103 @@ check('tutti gli 11 punti trovano una testa di nota (nessuno "non raggiunto")',
   esito.painted === COLS.length && esito.missed.length === 0);
 check('i rossi sono molti meno delle teste disegnate (non ho colorato tutto)',
   esito.rosseMenoDelleTotali);
-check('i punti con due regole portano UN tooltip con entrambi i nomi',
-  esito.titoli.includes('dynamics-adherence, chord-jitter')
-  && esito.titoli.includes('syncopated-pedal, pedal-toggle')
-  && esito.titoli.includes('pitch-agreement, dynamics-adherence')
-  && esito.titoli.includes('articulation, pitch-range'));
-check('i tooltip non dicono n\'altro che i nomi delle regole',
-  esito.titoli.length > 0 && esito.titoli.every((t) => /^[a-z-]+(, [a-z-]+)*$/.test(t)));
+check('nessuna testa dipinta si porta dietro il <title> nativo',
+  esito.titoliNativi === 0);
 check('dopo clear non resta nessuna testa rossa', esito.restanoRosseDopoClear === 0);
-check('dopo clear non resta nessun tooltip', esito.restanoTitoliDopoClear === 0);
 check('il nero originale delle teste e\' tornato al suo posto', esito.neroTornato);
 check('l\'attacco fuori dal brano non colora niente e si dichiara mancato',
   esito.fuoriAttaccoPainted === 0 && esito.fuoriAttaccoMissed.includes('pitch-agreement'));
 check('la pennellata non lascia il cursore visibile', esito.cursoreNascostoDopo);
+
+// --------------------------------------------------------------------- l'hover
+// La card la si prova col mouse VERO, perche' e' li' che il ponte window-listener
+// → WeakMap → ErrorHoverCard si rompe se qualcosa non torna. Un punto alla volta,
+// cosi' si sa cosa deve dire la card: le due regole dell'attacco 3 con la coppia
+// delle velocita', poi la coppia del pitch all'attacco 0.
+
+async function centroPrimaTestaRossa() {
+  return page.evaluate(() => {
+    for (const h of document.querySelectorAll('#sheet-container g.vf-notehead')) {
+      for (const p of h.querySelectorAll('path')) {
+        if ((p.getAttribute('fill') || '').toLowerCase() === '#a0442c') {
+          const r = h.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+    }
+    return null;
+  });
+}
+
+// Lo stato di pennellata VIENE APPOGGIATO in pagina: MarkState contiene elementi
+// SVG veri, e gli argomenti di page.evaluate vengono serializzati — passare uno
+// stato da fuori avrebbe consegnato al clear involucri vuoti. Pila in pagina,
+// l'ultima pennellata si spegne per prima: unico ordine che non lascia rossi orfani.
+async function dipingiUnPunto(col) {
+  await page.evaluate((c) => {
+    const res = window.__marks.paint(window.__osmd, [c]);
+    // in pila lo STATO di pennellata, non l'involucro {state,painted,missed}:
+    // clearScoreMarks vuole le path salvate, e clear(involucro) sarebbe muto
+    (window.__sonda = window.__sonda || []).push(res.state);
+  }, col);
+}
+async function spegniUltimo() {
+  await page.evaluate(() => {
+    const st = window.__sonda.pop();
+    if (st) window.__marks.clear(st);
+  });
+}
+
+// stato A: due regole sullo stesso punto, una con la coppia velocity
+await dipingiUnPunto(COLS[1]);
+const centroA = await centroPrimaTestaRossa();
+check('il punto con due regole trova comunque UNA sola testa su cui mostrare la card',
+  centroA !== null);
+await page.mouse.move(5, 5);
+await page.mouse.move(centroA.x, centroA.y);
+const cardA = await page.waitForSelector('.ehc-card', { timeout: 3000 }).catch(() => null);
+check('il mouse sopra una nota rossa fa comparire la card al volo, senza rettangoli nativi',
+  cardA !== null);
+const testoA = cardA ? await cardA.textContent() : '';
+check('la card dice ENTRAMBE le regole di quel punto in due righe separate',
+  testoA.includes('dynamics-adherence') && testoA.includes('chord-jitter'));
+check('la riga della dinamica porta la coppia premuto/scritto, formattata una sola volta',
+  testoA.includes('you 101 · score 84'));
+check('la card sa dove sei: misura e battitura in testa',
+  testoA.includes('measure 2'));
+
+// stato B: la coppia del pitch, col nome del tasto — formattata da noteName, non
+// dalle due estremita' che inventano ciascuna il proprio
+await spegniUltimo();
+await page.mouse.move(5, 5);
+await page.waitForTimeout(250);
+await dipingiUnPunto(COLS[0]);
+const centroB = await centroPrimaTestaRossa();
+await page.mouse.move(centroB.x, centroB.y);
+const cardB = await page.waitForSelector('.ehc-card', { timeout: 3000 }).catch(() => null);
+const testoB = cardB ? await cardB.textContent() : '';
+check('il pitch premuto e scritto escono coi NOMI dei tasti, non coi numeri nudi',
+  testoB.includes('you D4 · score E4') && !testoB.includes('you 62'));
+// la testa cancellata deve SMENTIRE l'hover: clear toglie la testa dalla mappa,
+// e un puntatore che torna non deve piu' vedere nulla (WeakMap + delete esplicito)
+await spegniUltimo();
+await page.mouse.move(5, 5);
+await page.waitForTimeout(200);
+await page.mouse.move(centroB.x, centroB.y);
+await page.waitForTimeout(400);
+check('una testa cancellata smette di rispondere all\'hover: la mappa si pulisce col rosso',
+  await page.locator('.ehc-card').count() === 0);
+// e allontanando il mouse da una card aperta, la card deve andarsene subito
+await dipingiUnPunto(COLS[1]);
+const centroC = await centroPrimaTestaRossa();
+await page.mouse.move(centroC.x, centroC.y);
+check('anche sul secondo punto la card si apre',
+  (await page.waitForSelector('.ehc-card', { timeout: 3000 }).catch(() => null)) !== null);
+await page.mouse.move(600, 8);
+await page.waitForTimeout(300);
+check('il mouse che se ne va chiude la card: nessuna coda di rettangoli immaginari',
+  await page.locator('.ehc-card').count() === 0);
+await spegniUltimo();
 
 // una foto della coloratura, per guardarla con gli occhi oltre che coi numeri
 await page.evaluate((cols) => {

@@ -1,0 +1,116 @@
+/* La carta del punteggio: centrata SUL VIEWPORT, non in fondo al documento.
+   La lezione è la stessa del countdown (pages/ScorePage.css): il conteggio
+   lungo tutto il foglio rendeva il numero illeggibile — qui l'unica cosa che
+   serve all'allievo appena finite le dita deve stare dove guardano già.
+   Nessun velo: dietro restano visibili i rossi sulla partitura, perché il
+   numero dice QUANTI errori e i rossi dicono DOVE, e servono tutte e due le
+   cose insieme. */
+
+.pc-layer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none; /* il centro parla, il resto della pagina vive: solo la carta cattura */
+  z-index: 1001; /* sopra striscia e pillola (999/1000), sotto la card dell'hover (1002) */
+  padding: 1rem;
+}
+
+.pc-card {
+  pointer-events: auto;
+  width: min(92vw, 25rem);
+  background: var(--bg-secondary);
+  border: 1px solid rgba(197, 168, 128, 0.45);
+  border-radius: 14px; /* la stessa rotondità misurata buona per le carte di questo tema */
+  box-shadow: 0 18px 48px rgba(58, 35, 33, 0.22);
+  padding: 1.6rem 1.4rem 1.3rem;
+  text-align: center;
+}
+
+.pc-caption {
+  margin: 0 0 0.2rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9a9284;
+}
+
+/* Il numero protagonista: sale da 0 nel script, e la tinta è il linguaggio
+   colori dell'app (verde = ok, oro = da lavorare, rosso = errore), non una
+   scala inventata per l'occasione. */
+.pc-score {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: clamp(3.4rem, 12vw, 4.6rem);
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums; /* le cifre non ballano mentre sale */
+  color: var(--text-primary);
+}
+
+.pc-of {
+  font-size: 0.32em;
+  color: #9a9284;
+  margin-left: 0.15em;
+}
+
+.pc-good .pc-score { color: #2f6b47; }
+.pc-fair .pc-score { color: #8a6d3b; }
+.pc-poor .pc-score { color: #8b2f2f; }
+
+.pc-none {
+  margin: 0.4rem 0 0;
+  font-family: var(--font-heading);
+  font-size: 1.3rem;
+  color: #6b5b95; /* il viola di "non è colpa tua": qui non ha giudicato nessuno */
+}
+
+.pc-line {
+  margin: 0.7rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.pc-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3.2rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+/* Punto che respira mentre la richiesta è in volo — stesso gesto della striscia
+   di pratica (@keyframes pb-breath), perché è la stessa attesa detta allo stesso modo. */
+.pc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  animation: pc-breath 1.2s ease-in-out infinite;
+}
+
+@keyframes pc-breath {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-dot { animation: none; opacity: 0.8; }
+}
+
+.pc-error {
+  margin: 0.4rem 0 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #8b2f2f;
+}
+
+.pc-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+}

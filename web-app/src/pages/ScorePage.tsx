@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
 import { useVerdict } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
-import { planMarks, hoverLabel, summaryLines } from '../hooks/scoreMarks';
+import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, summaryLines, type MarkTip } from '../hooks/scoreMarks';
 import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
 import PianoKeyboard from '../components/PianoKeyboard';
+import PerformanceCard from '../components/PerformanceCard';
+import ErrorHoverCard from '../components/ErrorHoverCard';
 import './ScorePage.css';
 
 // Module-level refs for dynamic imports
@@ -58,28 +60,50 @@ function readScoreBpm(scoreXml: string): number {
  * `playing`   lo spartito suona e la tastiera viene registrata.
  *
  * `PlayerState` del player contiene solo Stopped/Playing/Paused e non espone
- * eventi, quindi la fine del brano non si può osservare: si deduce qui,
- * interrogando position >= duration. La tolleranza evita che l'ultimo
- * millisecondo venga tagliato.
+ * eventi (verificato nel bundle: `_state` viene scritto solo nel costruttore,
+ * in play() e in pause()), quindi la fine del brano non arriva mai come
+ * segnale. La decide `endSignal` in scoreMarks.ts — due fatti certi, il tetto
+ * di position o un riavvolgimento a traccia già consumata — letta qui dal tick
+ * del player. Niente soglie percentuali: l'utente le ha respinte.
  */
 type Phase = 'idle' | 'countdown' | 'playing';
 
 /**
- * Margine con cui `position` si considera arrivato alla fine.
- *
- * Non è una tolleranza arbitraria: `Player.position` è definito come
- * `min(currentTime * 1000, duration - 1)`, quindi non può MAI raggiungere
- * `duration`. Con un margine generoso il brano finiva 250 ms prima del vero
- * fondo e l'ultima nota restava fuori dal verdetto. Qui si segue il tetto
- * reale, con 1 ms di respiro per l'arrotondamento in virgola mobile.
- */
-const END_SLACK_MS = 2;
-
-/**
  * Se `position` resta fermo mentre si dovrebbe sentire qualcosa, il sequencer
  * non arrivera' mai al fondo. Chiudere la prova e' meglio che non darla mai.
+ * Non è una fine "certa" come le due di `endSignal` (scoreMarks.ts): è il
+ * lasciarsi andare onesto, e per questo resta qui nel page, fuori dalla regola.
  */
 const STALL_MS = 2000;
+
+/**
+ * Gli interruttori della pratica — tastiera di richiamo, L e R — sopravvivono
+ * alla sessione (richiesta esplicita 2026-11-10: "se la disattivo e faccio
+ * ripartire da capo il brano ricompare di nuovo ... rendile persistenti, non
+ * si devono resettare a meno che non lo scelga l'utente"). L'unica cosa che li
+ * cambia è il click su di essi; né entrare né uscire dalla pratica li tocca.
+ * Si salvano nel browser così che restino tali anche ricaricando la pagina.
+ */
+interface PracticePrefs { kb: boolean; left: boolean; right: boolean }
+
+const PREFS_KEY = 'cadenza-practice-controls';
+
+/** Prime visite: tutto acceso, come era prima che la persistenza venisse chiesta. */
+function loadPracticePrefs(): PracticePrefs {
+  const fresh: PracticePrefs = { kb: true, left: true, right: true };
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return fresh;
+    const p = JSON.parse(raw) as Partial<PracticePrefs>;
+    // ogni campo si convalida da solo: un pezzo scritto male non porta dentro
+    // uno stato inventato, e nemmeno uno buono si perde per culpa dell'altro
+    return {
+      kb: typeof p.kb === 'boolean' ? p.kb : fresh.kb,
+      left: typeof p.left === 'boolean' ? p.left : fresh.left,
+      right: typeof p.right === 'boolean' ? p.right : fresh.right,
+    };
+  } catch { return fresh; } // quota, modalità privata, JSON corrotto: scelta persa, pagina viva
+}
 
 /**
  * Il countdown fa DA 4 A 1, un secondo per numero (chiarimento dell'utente del
@@ -199,8 +223,21 @@ const MARK_RED = '#a0442c';
  *  diventerebbe l'accusa di una prova che non è quella in corso. */
 interface MarkState {
   paths: Array<{ el: SVGPathElement; fill: string | null; stroke: string | null }>;
-  titles: SVGTitleElement[];
+  /** le teste bagnate nel rosso, per togliere anche la loro card d'hover */
+  heads: SVGGElement[];
 }
+
+/**
+ * Cosa mostrare sopra ogni testa rossa. Non è più un `<title>` nativo — il
+ * rettolino grigio del browser è stato eliminato su richiesta esplicita
+ * (2026-11-10: "l'errore dentro un rettangolino brutto... lo voglio come
+ * componente in tema col sito"): la mappa alimenta la card React
+ * `ErrorHoverCard`, stessa pelle delle barre mobili. È una WeakMap perché le
+ * teste vengono ricreate a ogni re-render di OSMD (zoom): se ne vanno loro,
+ * se ne va la voce; il clear le toglie comunque esplicitamente, perché una
+ * testa scolorita non deve più rispondere all'hover.
+ */
+const markTips = new WeakMap<SVGGElement, MarkTip>();
 
 function clearScoreMarks(state: MarkState | null): void {
   if (!state) return;
@@ -210,7 +247,7 @@ function clearScoreMarks(state: MarkState | null): void {
     if (stroke === null) el.removeAttribute('stroke');
     else el.setAttribute('stroke', stroke);
   }
-  for (const t of state.titles) t.remove();
+  for (const h of state.heads) markTips.delete(h);
 }
 
 /** Una testa di nota, la sua x e il suo gruppo: la geometria è l'unico ponte
@@ -221,24 +258,20 @@ interface NoteheadHit {
   cx: number;
 }
 
-/** Tinge di rosso una testa di nota e le appende il tooltip nativo del browser
- *  (un `<title>` dentro un gruppo SVG viene mostrato all'hover, misurato): sono
- *  solo i nomi delle regole cascate lì, come richiesto, niente altro. */
-function paintNotehead(head: SVGGElement, label: string, state: MarkState): void {
+/** Tinge di rosso una testa di nota. La card dell'hover non si appende qui:
+ *  sta nel DOM della pagina, alimentata dalla mappa, per restare nel tema e
+ *  morire quando la testa torna pulita. */
+function paintNotehead(head: SVGGElement, state: MarkState): void {
   for (const p of head.querySelectorAll<SVGPathElement>('path')) {
     state.paths.push({ el: p, fill: p.getAttribute('fill'), stroke: p.getAttribute('stroke') });
     p.setAttribute('fill', MARK_RED);
     p.setAttribute('stroke', MARK_RED);
   }
-  const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-  title.textContent = label;
-  head.insertBefore(title, head.firstChild);
-  state.titles.push(title);
 }
 
 /**
  * Dipingere di rosso i punti in cui il verdetto ha colto l'esecuzione in fallo,
- * e attaccarci sopra il tooltip con i nomi delle regole cascate lì.
+ * e preparare sopra ognuno la sua card d'hover con le regole cascate lì.
  *
  * COME ARRIVA ALLA NOTA — contando. Ogni punto arriva dal servizio con `attack`:
  * l'indice assoluto dell'attacco nello spartito completo, ed è ciò che il
@@ -262,7 +295,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
   firstEl: SVGGElement | null;
   missed: string[];
 } {
-  const state: MarkState = { paths: [], titles: [] };
+  const state: MarkState = { paths: [], heads: [] };
   const missed: string[] = [];
   let firstEl: SVGGElement | null = null;
   let painted = 0;
@@ -271,7 +304,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
   // non colorati a caso sul primo che passa.
   const walk: Array<{ col: MarkColumn; attack: number }> = [];
   for (const c of columns) {
-    if (c.attack === null || c.attack < 0) missed.push(...c.rules);
+    if (c.attack === null || c.attack < 0) missed.push(...c.rules.map((r) => r.name));
     else walk.push({ col: c, attack: c.attack });
   }
   // Il cammino procede solo in avanti (il cursore non torna indietro), quindi si
@@ -287,7 +320,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
     pos = moveCursorToStep(osmd, attack, pos);
     if (pos < attack) {
       // la fermata non c'è (brano più corto del previsto, o iteratore rotto)
-      missed.push(...col.rules);
+      missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     // moveCursorToStep ha già reso il cursore visibile su questo punto: la sua
@@ -295,7 +328,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
     const img = Array.from(document.querySelectorAll<HTMLElement>('[id^="cursorImg-"]'))
       .find((el) => el.style.display !== 'none');
     if (!img) {
-      missed.push(...col.rules);
+      missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     const ir = img.getBoundingClientRect();
@@ -318,7 +351,7 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
       heads.push({ el: h, cx: r.left + r.width / 2 });
     }
     if (!heads.length) {
-      missed.push(...col.rules);
+      missed.push(...col.rules.map((r) => r.name));
       continue;
     }
 
@@ -342,20 +375,25 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[]): {
       }
     }
     if (!best || bestD > accept) {
-      missed.push(...col.rules);
+      missed.push(...col.rules.map((r) => r.name));
       continue;
     }
 
     // l'accordo intero: tutte le teste alla stessa ascissa della scelta migliore
     const cluster = Math.max(3, gap * 0.3);
+    // la card d'hover si prepara UNA per la colonna e vale per tutte le teste
+    // dell'istessa istante: è lo stesso errore visto da due righi
+    const tip = markTipFor(col);
     let any = false;
     for (const h of heads) {
       if (Math.abs(h.cx - best.cx) > cluster) continue;
-      paintNotehead(h.el, hoverLabel(col), state);
+      paintNotehead(h.el, state);
+      markTips.set(h.el, tip);
+      state.heads.push(h.el);
       any = true;
     }
     if (!any) {
-      missed.push(...col.rules);
+      missed.push(...col.rules.map((r) => r.name));
       continue;
     }
     painted++;
@@ -437,20 +475,39 @@ const ScorePage: React.FC = () => {
   // 2026-11-07): la lettera accesa partecipa, quella spenta no, e "tutte e due
   // le mani" significa premerle entrambe. Il piano da mandare al servizio lo
   // decide `handSelection` nel modulo puro; qui sta solo lo stato dei due
-  // interruttori, acceso da entrambe le parti a ogni nuova sessione.
-  const [handsOn, setHandsOn] = useState<HandsSwitch>({ left: true, right: true });
+  // interruttori. Dal 2026-11-10 quello stato è PERSISTENTE: si riapre la
+  // pratica, o si ricarica la pagina, e le lettere restano dove le ha lasciate
+  // chi suona — solo i loro click le cambiano ("non si devono resettare a meno
+  // che non lo scelga l'utente").
+  const [handsOn, setHandsOn] = useState<HandsSwitch>(() => {
+    const p = loadPracticePrefs();
+    return { left: p.left, right: p.right };
+  });
   const handSel = handSelection(practice.hands, handsOn);
 
   /**
    * La tastiera di richiamo, aperta o chiusa dal pulsante a forma di pianoforte.
    *
-   * Parte APERTA: da quando la riga non porta piu' "1/128" e "0/2 tasti", la
-   * tastiera accesa e' l'equivalente visivo di quel contatore, e chi entra in
-   * pratica deve trovare il tasto subito, non dopo un clic su un'icona. Si puo'
-   * chiudere in qualunque momento con lo stesso pulsante, e la scelta non tocca
-   * niente dell'esercizio: e' solo vista.
+   * All'inizio dei tempi partiva APERTA: da quando la riga non porta piu'
+   * "1/128" e "0/2 tasti", la tastiera accesa e' l'equivalente visivo di quel
+   * contatore, e chi entra in pratica deve trovare il tasto subito. Dal
+   * 2026-11-10 resta pero' quello che chi suona ne ha fatto: si chiude una
+   * volta, e alla prossima sessione la si trova chiusa. Uscire dalla pratica
+   * non è una scelta sull'interruttore, quindi non lo tocca; la tastiera non si
+   * vede comunque fuori dalla pratica (il render la lega a `isPractice`).
    */
-  const [keyboardOpen, setKeyboardOpen] = useState(true);
+  const [keyboardOpen, setKeyboardOpen] = useState(() => loadPracticePrefs().kb);
+
+  // Scritta a ogni movimento degli interruttori: la scelta di chi suona vive
+  // quanto il browser, non quanto la sessione. Se il salvataggio fallisce
+  // (quota, modalità privata) la scelta resta valida per questa pagina.
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({
+        kb: keyboardOpen, left: handsOn.left, right: handsOn.right,
+      }));
+    } catch { /* persistenza optional, l'esercizio no */ }
+  }, [keyboardOpen, handsOn]);
 
   // Dove comincia, dentro `midi.recording`, la roba del passo corrente.
   //
@@ -478,8 +535,10 @@ const ScorePage: React.FC = () => {
     setProgress(0);
     setPhase('idle');
     setIsPractice(true);
-    setKeyboardOpen(true);
-    setHandsOn({ left: true, right: true });   // a ogni nuova sessione le mani sono tutte e due accese
+    // Gli interruttori NON si toccano: chi rientra in pratica trova la tastiera
+    // e le mani dove le ha lasciate (vedi `loadPracticePrefs`), non una
+    // reimpostazione decisa dalla pagina. Il piano giusto per le lettere attuali
+    // lo chiede da sé l'effetto che confronta `handSel` con il piano in carica.
     midi.clearRecording();
     stepStartRef.current = 0;
     lastLenRef.current = 0;
@@ -514,8 +573,9 @@ const ScorePage: React.FC = () => {
 
   const stopPractice = useCallback(() => {
     setIsPractice(false);
-    setKeyboardOpen(false);
-    setHandsOn({ left: true, right: true });   // rientrando, si riparte da tutte e due le mani
+    // Nessuna mano da riaccendere, nessuna tastiera da richiudere: uscire dalla
+    // pratica non è un gesto sugli interruttori, e dal 2026-11-10 non ne tocca
+    // nessuno. La prossima sessione riparte dalle scelte già fatte.
     // Anche l'attesa va interrotta: senza questo, uscire mentre il browser
     // chiede il permesso lascerebbe a schermo il pannello "concedi il
     // permesso", con la pratica gia' chiusa.
@@ -671,17 +731,17 @@ const ScorePage: React.FC = () => {
   const [markedSpots, setMarkedSpots] = useState(0);
   const [missedRules, setMissedRules] = useState<string[]>([]);
 
-  // Il pannello che resta serve da riga di riepilogo: quando non c'è nessun
-  // rosso da mostrare (tutto pulito, o tutto non localizzabile) è l'unica cosa
-  // che parla, e va portato in vista come prima. scroll-margin-bottom in
-  // .verdict-panel gli impedisce di fermarsi sotto la barra dei comandi.
-  const verdictPanelRef = useRef<HTMLElement>(null);
+  // La card che appare mentre il mouse sta su una nota rossa: coordinate del
+  // puntatore e contenuto preso dalla mappa markTips. Niente <title> nativo —
+  // la richiesta del 2026-11-10 vuole una card nel tema del sito.
+  const [tipHover, setTipHover] = useState<{ x: number; y: number; tip: MarkTip } | null>(null);
 
   useEffect(() => {
     clearScoreMarks(marksRef.current);
     marksRef.current = null;
     setMarkedSpots(0);
     setMissedRules([]);
+    setTipHover(null); // il verdetto che si rinnova non deve lasciare una card su una nota ormai scolorita
     if (verdict.status !== 'done' || !verdict.verdicts || isPractice) return;
     const plan = planMarks(verdict.verdicts);
     const out = paintScoreMarks(osmdRef.current, plan.columns);
@@ -690,12 +750,56 @@ const ScorePage: React.FC = () => {
     setMissedRules(out.missed);
     if (out.firstEl) {
       // il punto in cui andare a vedere per primo: un verdetto che dice dove è
-      // successo e ti lascia in cima alla pagina ti fa comunque cercare l'errore
+      // successo e ti lascia in cima alla pagina ti fa comunque cercare l'errore.
+      // Se di rossi non c'è niente, non si scorre da nessuna parte: la carta del
+      // punteggio arriva da sola davanti agli occhi, dove lo sguardo sta già.
       out.firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    } else {
-      verdictPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }, [verdict.status, verdict.verdicts, isPractice]);
+
+  /** Il voto 0-100 della carta centrata — lo decide `performanceScore`, qui si legge e basta. */
+  const scoreOutcome = useMemo(
+    () => (verdict.status === 'done' && verdict.verdicts
+      ? performanceScore(verdict.verdicts, verdict.noteCount)
+      : null),
+    [verdict.status, verdict.verdicts, verdict.noteCount],
+  );
+
+  // Un solo ascoltatore di hover per tutta la pagina, attaccato a window: le
+  // teste rosse nascono e muoiono a ogni verdetto e a ogni re-render di OSMD,
+  // e rincorrerle con i listener sarebbe l'ennesimo posto dove il conto può
+  // divergere. Si guarda cosa c'è sotto il puntatore, e se la mappa ce l'ha fra
+  // le bagne del rosso si mostra la sua card — una sola alla volta, quella che
+  // interessa. La pagina che scorre o gira la rotellina la nasconde: una card
+  // ferma nel punto vecchio mentre la nota è volata via mentirebbe.
+  useEffect(() => {
+    const headUnder = (t: EventTarget | null) =>
+      (t as Element | null)?.closest?.('g.vf-notehead') ?? null;
+    const onOver = (e: PointerEvent) => {
+      const head = headUnder(e.target);
+      if (!head) return;
+      const tip = markTips.get(head as SVGGElement);
+      if (tip) setTipHover({ x: e.clientX, y: e.clientY, tip });
+    };
+    const onOut = (e: PointerEvent) => {
+      const head = headUnder(e.target);
+      if (!head) return;
+      // dentro la stessa testa si passa fra path figli: non è un'uscita
+      if (headUnder(e.relatedTarget) === head) return;
+      setTipHover(null);
+    };
+    const hide = () => setTipHover(null);
+    window.addEventListener('pointerover', onOver);
+    window.addEventListener('pointerout', onOut);
+    window.addEventListener('wheel', hide, { passive: true });
+    window.addEventListener('scroll', hide, { passive: true });
+    return () => {
+      window.removeEventListener('pointerover', onOver);
+      window.removeEventListener('pointerout', onOut);
+      window.removeEventListener('wheel', hide);
+      window.removeEventListener('scroll', hide);
+    };
+  }, []);
 
   // Re-enable MIDI from upload page state
   useEffect(() => {
@@ -760,17 +864,56 @@ const ScorePage: React.FC = () => {
     setPhase('playing');
   }, [phase, count]);
 
-  // Avanziamento e fine brano. PlayerState non ha uno stato "finito" e il player
-  // non emette eventi, quindi la fine si deduce da position contro duration.
-  // position è bloccato a duration - 1 dal player stesso: la soglia segue quel
-  // tetto, non un margine arbitrario, altrimenti il brano chiude prima del
-  // fondo reale e l'ultima nota resta fuori dal verdetto.
+  // Avanziamento e fine brano. La fine non si deduce dal comportamento: la
+  // dichiarano il motore audio stesso o i suoi fatti nudi, in questo ordine —
+  // (1) `songEnded` dall'eventHandler del sequencer: parte SOLO quando il
+  //     worklet ha esaurito la traccia (bundle: pausa con isFinished →
+  //     callEventInternal songEnded); (2) il CALO di `.loopCount` sul thread
+  //     principale, che è come il messaggio loopCountChange del worklet arriva
+  //     davvero (il caso nel sorgente aggiorna il campo e non chiama
+  //     l'eventHandler): salto dichiarato, e `consumedFullTrack` risponde se
+  //     quel salto era la fine travestita da ripartenza (il bug denunciato
+  //     dall'utente) o la ripetizione scritta del brano, che si registra e si
+  //     continua a suonare; (3-4) le due regole di `endSignal` (scoreMarks.ts)
+  //     come rete quando il canale eventi tace: il tetto del getter di
+  //     position, impossibile prima del consumo, o la caduta a traccia già
+  //     consumata. In cima a tutto, la verità del worklet; sotto, solo fatti
+  //     letti con certezza; nessuna soglia percentuale — quella l'utente l'ha
+  //     respinta il 2026-11-10.
   useEffect(() => {
     if (phase === 'countdown') return;
     if (phase === 'idle' && !isPlaying) return;
     let animationId: number;
     let lastPos = -1;
+    let prevPos = -1;
     let stalledSince = 0;
+    // Contatore di bordo: somma degli avanzamenti POSITIVI di position. Su una
+    // sequenza che sale e basta (o risale solo riavvolgendo) vale quanto la
+    // posizione reale, ed è l'unica cosa che può dirlo quando la cima da 2 ms
+    // non viene mai campita perché il passo del tick la scavalca. Serve anche
+    // come misura per la domanda sul salto di loop dichiarato (punto 2).
+    let percorso = 0;
+    let passoMax = 0;
+    // Una sola chiusura per presa, chiunque l'abbia trovata: songEnded e il
+    // tick possono arrivare nello stesso battito, e una doppia analisi
+    // pubblicherebbe due verdetti sullo stesso tiro.
+    let chiuso = false;
+    const chiudi = () => {
+      if (chiuso) return;
+      chiuso = true;
+      void finishPlayAlong();
+    };
+    const inPresa = phase === 'playing';
+    const seq = (playerRef.current as any)?._sequencer;
+    const eventi = seq?.eventHandler;
+    let contLoops: number | null = typeof seq?.loopCount === 'number' ? seq.loopCount : null;
+    if (inPresa && eventi?.addEvent) {
+      try {
+        eventi.addEvent('songEnded', 'cadenza-take', () => chiudi());
+      } catch {
+        /* build sconosciuta del sequencer: restano i fatti letti dal tick */
+      }
+    }
     const tick = (now: number) => {
       const player = playerRef.current;
       if (player) {
@@ -778,9 +921,34 @@ const ScorePage: React.FC = () => {
         const pos = player.position;
         if (dur > 0) {
           setProgress((pos / dur) * 100);
-          if (phase === 'playing') {
-            if (pos >= dur - END_SLACK_MS) {
-              void finishPlayAlong();
+          if (inPresa) {
+            // Fatto dichiarato 2: il worklet ha contato un salto di loop e il
+            // thread principale l'ha scritto in .loopCount. La domanda "fine o
+            // ripetizione?" la decide il modulo puro, col contatore di bordo.
+            const loops = typeof seq?.loopCount === 'number' ? seq.loopCount : null;
+            if (loops !== null && contLoops !== null && loops < contLoops) {
+              contLoops = loops;
+              if (consumedFullTrack(dur, percorso, passoMax)) {
+                chiudi();
+                return;
+              }
+              //else: salto a metà brano = la ripetizione scritta che torna
+              // indietro: fa parte dell'esecuzione, si continua a registrare.
+            } else if (loops !== null) {
+              contLoops = loops;
+            }
+            // Il contatore di bordo si aggiorna prima di ogni giudizio: i passi
+            // positivi sono distanza percorsa sulla traccia; cadute e fermate
+            // non vi aggiungono niente.
+            const passo = pos - prevPos;
+            if (passo > 0) {
+              percorso += passo;
+              if (passo > passoMax) passoMax = passo;
+            }
+            // Fatti 3-4: tetto toccato, o caduta a traccia già consumata.
+            const esito = endSignal(dur, pos, prevPos, percorso, passoMax);
+            if (esito !== null) {
+              chiudi();
               return;
             }
             // Rete di sicurezza: il sequencer fermo prima del fondo non
@@ -789,7 +957,7 @@ const ScorePage: React.FC = () => {
             if (pos === lastPos) {
               if (stalledSince === 0) stalledSince = now;
               else if (now - stalledSince > STALL_MS) {
-                void finishPlayAlong();
+                chiudi();
                 return;
               }
             } else {
@@ -797,12 +965,22 @@ const ScorePage: React.FC = () => {
               stalledSince = 0;
             }
           }
+          prevPos = pos; // il prelievo precedente: base della differenza, non soglia
         }
       }
       animationId = requestAnimationFrame(tick);
     };
     animationId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animationId);
+    return () => {
+      cancelAnimationFrame(animationId);
+      if (eventi?.removeEvent) {
+        try {
+          eventi.removeEvent('songEnded', 'cadenza-take');
+        } catch {
+          /* il player è già stato distrutto: l'ascoltatore muore con lui */
+        }
+      }
+    };
   }, [phase, isPlaying, finishPlayAlong]);
 
   // Initialize player with OSMD renderer
@@ -1085,13 +1263,7 @@ const ScorePage: React.FC = () => {
           </section>
         ) : (
           <PracticeBar
-            stepIndex={practice.index}
-            total={practice.steps.length}
-            measure={practice.steps[practice.index]?.measure ?? 0}
-            expected={practice.steps[practice.index]?.pitch ?? []}
-            status={practice.status}
             problem={problem}
-            verdictStep={practice.verdictStep}
             judging={practice.judging}
             hands={practice.hands}
             handsOn={handsOn}
@@ -1101,11 +1273,6 @@ const ScorePage: React.FC = () => {
             onDynamicsChange={practice.setDynamicsOn}
             keyboardOpen={keyboardOpen}
             onKeyboardToggle={() => setKeyboardOpen((v) => !v)}
-            suspended={practice.suspended}
-            /* Un errore di rete non ferma l'esercizio: si segnala qui e si
-               continua a suonare. Interrompere un allievo per un problema del
-               servizio sarebbe la cosa peggiore che questa pagina possa fare. */
-            error={practice.error}
           />
         )
       )}
@@ -1136,46 +1303,29 @@ const ScorePage: React.FC = () => {
         )}
       </div>
 
-      {/* Verdicts — appear only after the performance has been analysed */}
+      {/* Il verdetto adesso è una carta centrata su ciò che si sta guardando,
+          non un riquadro da raggiungere col mouse in fondo al foglio (richiesta
+          2026-11-10): il numero sale davanti agli occhi, i rossi sulla partitura
+          restano visibili dietro e intorno a dirne il dove. */}
       {!isPractice && verdict.status !== 'idle' && (
-        <section className="verdict-panel" ref={verdictPanelRef}>
-          <div className="verdict-panel-head">
-            <h2 className="heading">Verdicts</h2>
-            {verdict.status === 'done' && (
-              <button className="btn btn-outline" onClick={verdict.reset}>Close</button>
-            )}
-          </div>
-
-          {verdict.status === 'working' && <p className="verdict-note">Aligning the performance and checking the seven rules…</p>}
-
-          {verdict.status === 'error' && <p className="verdict-note verdict-error">{verdict.error}</p>}
-
-          {verdict.status === 'done' && verdict.verdicts && (
-            <>
-              {summaryLines(
-                planMarks(verdict.verdicts),
-                markedSpots,
-                missedRules,
-                verdict.noteCount,
-              ).map((line) => (
-                <p
-                  key={line}
-                  className={
-                    line.startsWith('violated without') || line.startsWith('not judged')
-                      ? 'verdict-note verdict-caveat'
-                      : 'verdict-note'
-                  }
-                >
-                  {line}
-                </p>
-              ))}
-              <button className="btn btn-outline verdict-retry" onClick={() => void handlePlayAlong()}>
-                Play again
-              </button>
-            </>
-          )}
-        </section>
+        <PerformanceCard
+          status={verdict.status}
+          error={verdict.error}
+          outcome={scoreOutcome}
+          lines={verdict.status === 'done' && verdict.verdicts
+            ? summaryLines(
+              planMarks(verdict.verdicts),
+              markedSpots,
+              missedRules,
+              verdict.noteCount,
+            )
+            : []}
+          onClose={verdict.reset}
+          onPlayAgain={() => void handlePlayAlong()}
+        />
       )}
+
+      {tipHover && <ErrorHoverCard tip={tipHover.tip} x={tipHover.x} y={tipHover.y} />}
 
       {/* Floating Bottom Bar — always visible */}
       {!isLoading && (

@@ -2,14 +2,22 @@
  *
  * Perche' esiste: come per run_practice_tests.mjs, scoreMarks.ts e' un modulo
  * PURE (niente React, niente rete, niente import.meta.env), e la decisione che
- * prende — quali punti colorare, quali nomi finire in un tooltip, quando NON
- * colorare niente — deve essere verificabile senza browser. Questa e' la stessa
- * funzione compilata da tsc e finita nel bundle, non una sua descrizione.
+ * prende — quali punti colorare, cosa dire alle righe della card d'hover, come
+ * calcolare il voto 0-100, quando NON colorare niente — deve essere verificabile
+ * senza browser. Questa e' la stessa funzione compilata da tsc e finita nel
+ * bundle, non una sua descrizione.
+ *
+ * Dal 2026-11-10 scoreMarks importa `noteName` da practiceSteps (stesso nome del
+ * tasto della tastiera disegnata e della card), quindi i DUE file vengono
+ * compilati insieme: `require('./practiceSteps')` nell'emesso deve trovare il
+ * fratello, non una copia descritta a mano. Un package.json commonjs dichiarato
+ * qui dentro toglie ogni ambiguita' sul formato, qualunque sia il type dei
+ * package.json piu' in alto.
  *
  * Uso:  node alignment/run_scoremarks_tests.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, renameSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +29,11 @@ const require = createRequire(import.meta.url);
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
+writeFileSync(path.join(OUT, 'package.json'), '{"type":"commonjs"}\n');
 
 execFileSync('npx', ['tsc',
   'src/hooks/scoreMarks.ts',
+  'src/hooks/practiceSteps.ts',
   '--outDir', OUT,
   '--module', 'commonjs',
   '--target', 'es2020',
@@ -36,7 +46,7 @@ const emitted = path.join(OUT, 'scoreMarks.js');
 if (!existsSync(emitted)) throw new Error('tsc non ha prodotto scoreMarks.js');
 renameSync(emitted, path.join(OUT, 'scoreMarks.cjs'));
 
-const { planMarks, hoverLabel, summaryLines } = require(path.join(OUT, 'scoreMarks.cjs'));
+const { planMarks, markLines, markTipFor, performanceScore, summaryLines, endSignal, consumedFullTrack } = require(path.join(OUT, 'scoreMarks.cjs'));
 
 const esiti = [];
 function check(label, cond) {
@@ -60,7 +70,7 @@ const v1 = planMarks({
 check('due regole sullo stesso punto diventano UN solo rosso',
   v1.columns.length === 3);
 check('il punto in comune porta entrambe le regole, in ordine di arrivo',
-  hoverLabel(v1.columns[0]) === 'pitch-agreement, dynamics-adherence');
+  markLines(v1.columns[0]).map((l) => l.rule).join(', ') === 'pitch-agreement, dynamics-adherence');
 check('il punto in comune conserva l\'indice dell\'attacco',
   v1.columns[0].attack === 7);
 check('i punti sono ordinati per battuta e battitura',
@@ -89,7 +99,7 @@ const v2 = planMarks({
   'articulation': V(0), 'chord-jitter': V(0),                   // mandasse sporca
   'dynamics-adherence': V(0), 'pitch-range': V(0), 'syncopated-pedal': V(0),
 });
-check('exit 2 non colora niente', !v2.columns.some((c) => c.rules.includes('pedal-toggle')));
+check('exit 2 non colora niente', !v2.columns.some((c) => c.rules.some((r) => r.name === 'pedal-toggle')));
 check('exit 2 finisce nella riga "not judged"', v2.broken.join(',') === 'pedal-toggle');
 check('exit 2 non finisce fra le violate senza punto', !v2.unpinned.includes('pedal-toggle'));
 
@@ -129,7 +139,115 @@ const dup = planMarks({
   'chord-jitter': V(1, [L(2, 0), L(2, 0.5)]),
 });
 check('lo stesso punto ripetuto dalla stessa regola non raddoppia i nomi',
-  dup.columns.length === 2 && hoverLabel(dup.columns[0]) === 'pitch-agreement, chord-jitter');
+  dup.columns.length === 2 && markLines(dup.columns[0]).map((l) => l.rule).join(', ') === 'pitch-agreement, chord-jitter');
+
+// --------------------------------------- le righe della card d'hover coi numeri nudi
+// Il servizio allega `kind`/`played`/`written` dove i numeri esistono davvero.
+// La card vuole una riga per regola con la coppia "you · score": sono due numeri
+// veri, non una frase; e la formattazione vive QUI, provata, non nel JSX.
+const LV = (measure, beat, attack, kind, played, written) =>
+  ({ measure, beat, attack, kind, played, written });
+const sporchi = planMarks({
+  'pitch-agreement': V(1, [LV(5, 1, 7, 'pitch', 62, 64)]),          // D4 suonato, E4 scritto
+  'dynamics-adherence': V(1, [LV(5, 1, 7, 'velocity', 101, 84)]),
+  'chord-jitter': V(1, [{ measure: 5, beat: 1, attack: 7 }]),       // nessuna coppia di numeri
+});
+const righe = markLines(sporchi.columns[0]);
+check('tutte e tre le regole su UN punto = tre righe, una per regola',
+  righe.length === 3 && righe.map((l) => l.rule).join(' ') === 'pitch-agreement dynamics-adherence chord-jitter');
+check('la riga del pitch dice tasto premuto e tasto scritto, col nome giusto',
+  righe[0].detail === 'you D4 · score E4');
+check('la riga della dinamica dice le due velocità, senza allunghi',
+  righe[1].detail === 'you 101 · score 84');
+check('jitter senza numeri: la riga c\'è, il dettaglio no — niente inventato',
+  righe[2].detail === undefined);
+const tip5 = markTipFor(sporchi.columns[0]);
+check('la card sa anche dove sei: misura e battitura in testa',
+  tip5.measure === 5 && tip5.beat === 1 && tip5.lines.length === 3);
+// un solo numero c\'è, l\'altro no: la coppia è monca e la riga resta pulita
+const monco = planMarks({ 'pitch-agreement': V(1, [{ measure: 2, beat: 0, attack: 3, kind: 'pitch', played: 60, written: null }]) });
+check('coppia di numeri mezza assente = nessuna riga con buchi',
+  markLines(monco.columns[0])[0].detail === undefined);
+
+// ------------------------------------------------- il voto 0-100 della carta centrata
+const OK7 = Object.fromEntries(['pitch-agreement', 'chord-jitter', 'dynamics-adherence',
+  'pedal-toggle', 'syncopated-pedal', 'articulation', 'pitch-range'].map((k) => [k, V(0)]));
+const pulito = performanceScore(OK7, 216);
+check('esecuzione senza macchie: 100', pulito.score === 100 && pulito.flagged === 0);
+// stesso attacco colto da due regole = UN errore, non due: la pagella perdonerebbe
+// il doppio di quanto fa male davvero, e i rossi sulla partitura già contano uno
+const dueRegoleStessoPunto = performanceScore({
+  ...OK7, // prima la base pulita: poi le regole sporche la vincevano lo spread, non il caso
+  'pitch-agreement': V(1, [L(5, 1, 7), L(6, 0, 12)]),
+  'dynamics-adherence': V(1, [L(5, 1, 7)]),
+}, 20);
+check('due regole sullo stesso attacco scalano UNA volta sola: 2 errori su 20 = 90',
+  dueRegoleStessoPunto.flagged === 2 && dueRegoleStessoPunto.score === 90);
+const conUnpinned = performanceScore({
+  ...OK7,
+  'syncopated-pedal': V(1), // violated senza locations
+}, 10);
+check('violazione senza punto in fallo: conta un errore, non zero',
+  conUnpinned.flagged === 1 && conUnpinned.score === 90);
+const conRotta = performanceScore({ ...OK7, 'pitch-agreement': { ok: false, exit: 2 } }, 50);
+check('un monitor che non è partito NON toglie punti', conRotta.score === 100);
+const tutteRotte = performanceScore(Object.fromEntries(
+  Object.keys(OK7).map((k) => [k, { ok: false, exit: 2 }])), 50);
+check('se nessun monitor è partito il voto NON si dà: niente "100" bugiardo',
+  tutteRotte.score === null);
+const tuttoFallo = performanceScore({
+  'pitch-agreement': V(1, Array.from({ length: 30 }, (_, i) => L(i + 1, 0, i))),
+  ...Object.fromEntries(Object.keys(OK7).filter((k) => k !== 'pitch-agreement').map((k) => [k, V(0)])),
+}, 30);
+check('tutte le note segnate in fallo = 0, e non un numero sotto zero',
+  tuttoFallo.flagged === 30 && tuttoFallo.score === 0);
+const notaZero = performanceScore({ 'pitch-agreement': V(1, [L(1, 0, 0)]), ...Object.fromEntries(Object.keys(OK7).filter((k) => k !== 'pitch-agreement').map((k) => [k, V(0)])) }, 0);
+check('zero note contate ma un errore in mano: il voto tocca fondo senza divisioni bugiarde',
+  notaZero.score === 0 && notaZero.flagged === 1);
+
+// ─────────── la fine del brano: endSignal e consumedFullTrack (fatti, non soglie)
+// L'utente ha respinto la stima all'85% ("falsi positivi... preferirei
+// qualcosa di più robusto che è sicuro al 100%"). dur=60000 ms, passo tipico
+// 16 ms: il margine del riavvolgimento vale due passi misurati, non percentuali.
+check('cima raggiunta: è fine, anche se l\'ultimo prelievo veniva di lontano',
+  endSignal(60000, 59998, 40000, 40000, 16) === 'top');
+check('un millimetro sotto la cima non è ancora fine (lo slack è di 2 ms, non un\'approssimazione larga)',
+  endSignal(60000, 59997, 59981, 59981, 16) === null);
+check('caduta a metà brano: il falso positivo temuto dall\'utente NON diventa fine',
+  endSignal(60000, 1200, 30000, 30000, 16) === null);
+check('riavvolgimento dopo la traccia consumata per intero: è la fine travestita da ripartenza',
+  endSignal(60000, 8, 59970, 59970, 16) === 'rewind');
+check('caduta con la traccia NON ancora consumata (margine di due passi): si suona ancora',
+  endSignal(60000, 8, 59950, 59950, 16) === null);
+check('il primo prelievo della presa non ha un "prima": nessuna caduta da leggere',
+  endSignal(60000, 59990, -1, 59990, 16) === null);
+check('consumedFullTrack risponde da sola alla domanda del loop dichiarato dal worklet',
+  consumedFullTrack(60000, 59970, 16) === true &&
+  consumedFullTrack(60000, 30000, 16) === false &&
+  consumedFullTrack(60000, 0, 0) === false);
+// Il caso segnalato dall'utente, ricostruito fotogramma per fotogramma: salita
+// regolare, UN salto a metà (la cima dei 2 ms non viene mai campita perché il
+// passo la scavalca), poi il riavvolgimento del player. La fine dev'essere
+// colta QUELLA volta lì, non al giro dopo.
+const dente = [];
+for (let s = 0; s <= 59984; s += 16) dente.push(s === 2048 ? 2018 : s);
+dente.push(8, 24, 40);
+let pPrima = -1;
+let salita = 0;
+let passoCorsa = 0;
+let vistaTop = false;
+let esitoFine = null;
+let doveFine = -1;
+dente.forEach((s, i) => {
+  const d = s - pPrima;
+  if (d > 0) { salita += d; if (d > passoCorsa) passoCorsa = d; }
+  const e = endSignal(60000, s, pPrima, salita, passoCorsa);
+  if (e === 'top') vistaTop = true;
+  else if (e === 'rewind' && esitoFine === null) { esitoFine = e; doveFine = i; }
+  pPrima = s;
+});
+check('il caso dell\'utente, fotogramma per fotogramma: il salto a metà viene ignorato, la fine è colta al primo riavvolgimento',
+  !vistaTop && esitoFine === 'rewind' && doveFine === dente.length - 3);
 
 console.log('\n' + '='.repeat(58));
 const falliti = esiti.filter(([, ok]) => !ok);

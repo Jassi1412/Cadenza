@@ -46,10 +46,36 @@ from join import ScoreModel, join, to_jsonl
 from practice import (PRACTICE_RULES, SUSPENDED_RULES, PracticePlan, hand_summary,
                       step_status, trace_for_step)
 
-MONITOR = os.environ.get("RML_MONITOR", "/opt/rml")
-SPECS = os.environ.get("RML_SPECS", "/opt/specs")
 # batch.pl sta accanto a server.py: stessa directory, quindi stesso ROOT.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_spec_dir(container_path, dev_subdir):
+    """Dove stanno i .pl compilati quando nessun ambiente lo dice esplicitamente.
+
+    Il default vecchio scriveva "/opt/rml" e "/opt/specs" anche dove /opt non
+    esiste — cioè su ogni macchina che non sia il container di Render. Senza
+    RML_MONITOR/RML_SPECS esportate, swipl non trova nè la libreria monitor nè
+    le specifiche: ogni regola risponde exit 2, con stderr persino vuoto, e
+    l'allievo legge "cannot verify" in eterno mentre il servizio sembra
+    perfettamente vivo. `_find_batch` qui sotto racconta esattamente questa
+    storia; queste due righe erano l'altra meta' dello stesso guasto, rimaste
+    mute.
+
+    Il container vince comunque per primo: lo stage 1 di service/Dockerfile
+    compila i .rml dentro /opt/, quindi se quel percorso esiste si usa lui e
+    il comportamento di Render non cambia di un byte. Altrimenti si finisce
+    nei RML_DOCS/RML_TESTS del repo, le stesse cartelle a cui le suite puntano
+    i figli esplicitamente dal 2026-11-10 — perche' su una macchina di
+    sviluppo gli unici .pl che esistono sono compilati lì.
+    """
+    if os.path.isdir(container_path):
+        return container_path
+    return os.path.join(ROOT, "..", "RML_DOCS", "RML_TESTS", dev_subdir)
+
+
+MONITOR = os.environ.get("RML_MONITOR") or _default_spec_dir("/opt/rml", "monitor")
+SPECS = os.environ.get("RML_SPECS") or _default_spec_dir("/opt/specs", "metrics")
 
 
 def _find_batch():
@@ -244,7 +270,36 @@ def _run_metrics(trace_path, metrics):
     return verdicts
 
 
-def _locations(ids, events):
+def _detail_for(rule, ev):
+    """I numeri nudi di un punto violato: cosa e' stato suonato, cosa chiedeva lo spartito.
+
+    L'hover sulla nota rossa deve poter dire subito la differenza, senza frasi:
+    per le regole del pitch sono i due NUMERI di tasto (quello premuto e quello
+    atteso), per la dinamica le due VELOCITA'. Tutto il resto — jitter, pedale,
+    articolazione — non ha una coppia di numeri da mostrare, e l'hover si
+    limita al nome della regola con la posizione: meglio una riga in meno di
+    un valore inventato.
+
+    I nomi dei tasti non si formattano qui: li sa fare la pagina (`noteName`,
+    la stessa usata sui chip e sulla tastiera). Due formati diversi dello
+    stesso numero, uno per parte, sono il seme delle divergenze future.
+    """
+    rule = (rule or "").lower()
+    if rule.startswith("pitch"):
+        played = (ev.get("note") or {}).get("number")
+        written = (ev.get("expected") or {}).get("pitch")
+    elif rule.startswith("dyn"):
+        played = (ev.get("note") or {}).get("rawAttack")
+        written = (ev.get("expected") or {}).get("dyn")
+    else:
+        return None
+    if isinstance(played, int) and isinstance(written, int):
+        kind = "pitch" if rule.startswith("pitch") else "velocity"
+        return {"kind": kind, "played": played, "written": written}
+    return None  # un numero mancante non e' un verdetto: la riga sta senza valori
+
+
+def _locations(ids, events, rule=None):
     """Gli indici di batch.pl tradotti nei punti dello spartito.
 
     Un indice e' una riga della traccia, e ogni riga porta gia' dentro di se' il
@@ -255,6 +310,10 @@ def _locations(ids, events):
     alla nota giusta contando, come fa il cursore, perche' l'altezza del suono
     non e' un ponte affidabile fra i due mondi (octave-shift, sempre li').
     Qui si legge soltanto: niente calcoli, niente soglie.
+
+    Il `rule` serve solo a scegliere se allegare i numeri nudi (`_detail_for`):
+    la stessa riga della traccia sa gia' entrambi i valori, qui non si giudica
+    e non si confronta niente.
     """
     locs, seen = [], set()
     for i in ids:
@@ -269,8 +328,12 @@ def _locations(ids, events):
         if key in seen:
             continue
         seen.add(key)
-        locs.append({"measure": measure, "beat": beat,
-                     "attack": attack if isinstance(attack, int) else None})
+        loc = {"measure": measure, "beat": beat,
+               "attack": attack if isinstance(attack, int) else None}
+        detail = _detail_for(rule, events[i])
+        if detail:
+            loc.update(detail)
+        locs.append(loc)
     return locs
 
 
@@ -495,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
             for k, v in verdicts.items():
                 entry = {"ok": v[0], "exit": v[1]}
                 if v[1] == 1:
-                    entry["locations"] = _locations(v[3], events)
+                    entry["locations"] = _locations(v[3], events, k)
                 payload[k] = entry
             self._send(200, {
                 "events": len(events),
@@ -511,4 +574,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", 8080))), Handler).serve_forever()
+    port = int(os.environ.get("PORT", 8080))
+    # Dirlo UNA VOLTA all'avvio batte lasciar indovinare all'allievo in eterno:
+    # senza queste due cartelle ogni verdetto dice "cannot verify" in silenzio,
+    # e nessun documento aveva mai scritto che un avvio locale ne dipendeva
+    # fino al pomeriggio del 2026-11-10. Il testo e' inglese perche' lo legge
+    # chi avvia il servizio, non l'allievo.
+    for etichetta, percorso in (("monitor library", MONITOR), ("compiled specs", SPECS)):
+        if not os.path.isdir(percorso):
+            print(f'[cadenza] WARNING: {etichetta} directory not found: {percorso}\n'
+                  f'[cadenza]          every rule will answer exit 2 ("cannot verify"). '
+                  "Point RML_MONITOR/RML_SPECS at the compiled .pl directories.", flush=True)
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

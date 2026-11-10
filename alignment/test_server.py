@@ -327,6 +327,21 @@ try:
         check("con due note stonate pitch-agreement e' violata", pa.get("exit") == 1)
         check("la prova stonata produce posizioni", len(locs) > 0)
 
+        # L'hover minimalista della pagina vive di NUMERI, non di frasi: sulle
+        # note stonate ogni posizione deve portare il tasto premuto e quello
+        # scritto, come due interi. E da qualche parte i due devono differire,
+        # perche' qui le stonature le abbiamo messe noi dentro di proposito.
+        con_valori = [l for l in locs if l.get("kind") == "pitch"]
+        print("  %d/%d posizioni con i numeri nudi premuto/scritto"
+              % (len(con_valori), len(locs)))
+        check("le pitch violate portano i numeri premuto e scritto",
+              len(con_valori) > 0
+              and all(isinstance(l.get("played"), int)
+                      and isinstance(l.get("written"), int)
+                      for l in con_valori))
+        check("i due numeri raccontano l'errore: qualche tasto non e' quello chiesto",
+              any(l["played"] != l["written"] for l in con_valori))
+
         def attesa(i):
             n = sporche[i]
             b = model.snap_beat(model.beat_at(n["time_ms"]))

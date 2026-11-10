@@ -1,8 +1,8 @@
 import React from 'react';
 import './PracticeBar.css';
 import { Piano } from 'lucide-react';
-import { handSelection, noteName } from '../hooks/practiceSteps';
-import type { HandsSwitch, StepProblem, StepStatus } from '../hooks/practiceSteps';
+import { handSelection } from '../hooks/practiceSteps';
+import type { HandsSwitch, StepProblem } from '../hooks/practiceSteps';
 import type { HandInfo } from '../hooks/usePractice';
 
 /**
@@ -15,36 +15,29 @@ import type { HandInfo } from '../hooks/usePractice';
  * partitura mentre la cosa che serve guardare insieme e' il cursore sul rigo e il
  * tasto sulla tastiera. Chi usa l'app ha chiesto il minimo.
  *
- * COSA E' CADUTO DALLA RIGA, E DOVE E' FINITO. Il contatore dei passi (1/128) e
- * quello dei tasti (0/2) non compaiono piu': al loro posto c'e' il pulsante a forma
- * di pianoforte, che apre la tastiera dove i tasti del passo si accendono. Il
- * numero non diceva quale tasto fosse, il disegno si. Tutte le informazioni tolte
- * dalla vista (passo, battuta, nomi dei tasti, quante note dell'altro rigo sono
- * state ignorate, le regole sospese) stanno ora nel `title` di quel pulsante: un
- * titolo si legge una volta, un pannello se ne paga l'altezza a ogni passo.
+ * NIENTE PIU' TOOLTIP NATIVI (2026-11-10). Tutto quello che la riga ha tolto
+ * dalla vista stava nel `title` del pulsante tastiera, e i `title` sono quei
+ * rettolini grigi del browser che compaiono mezzo secondo dopo il mouse: chi
+ * usa l'app li ha eliminati per tutti i comandi della striscia — pianoforte,
+ * L, R, D. Da qui la regola: la riga NON mette informazioni nei tooltip; quel
+ * che serve si guarda sulla tastiera disegnata (i tasti d'oro sono i tasti da
+ * premere, la scritta "PRESS x" gia' lo dice) o si capisce dal colore dei tasti
+ * stessi. I nomi restano negli `aria-label`, che non hanno rettangolo e li
+ * leggono gli screen reader.
  *
  * PRESENTAZIONALE, come quello che sostituisce: non decide niente, non chiama il
  * servizio. Il testo del verdetto compatto lo ha gia' deciso `stepProblem` nel
- * modulo puro (dove viene provato dai test), e la completezza dei tasti arriva gia'
- * calcolata in `status`.
+ * modulo puro (dove viene provato dai test), e ogni colore dei tasti arriva gia'
+ * calcolato dal piano locale.
  *
- * TUTTO CIO' CHE SI LEGGE E' IN INGLESE, titoli compresi: dal 2026-11-04 e' una
- * regola di chi usa l'app, non una preferenza di stile (vedi `User Preferences` in
+ * TUTTO CIO' CHE SI LEGGE E' IN INGLESE, perche' dal 2026-11-04 e' una regola di
+ * chi usa l'app, non una preferenza di stile (vedi `User Preferences` in
  * ../../AGENTS.md). I commenti qui restano italiani perche' li legge chi mantiene.
  */
 
 export interface PracticeBarProps {
-  stepIndex: number;
-  total: number;
-  measure: number;
-  /** i tasti che questo passo chiede — finiscono nel `title` e nella tastiera */
-  expected: number[];
-  /** lo stato locale del passo corrente, o null se riguarda un altro passo */
-  status: StepStatus | null;
   /** la riga gia' decisa da `stepProblem`: tono, testo, e se il verdetto e' vecchio */
   problem: StepProblem;
-  /** a quale passo appartiene l'ultimo verdetto ricevuto, per dirlo nel tooltip */
-  verdictStep: number;
   judging: boolean;
   /** che cosa questo spartito permette di separare; null finche' non si e' risposto */
   hands: HandInfo | null;
@@ -59,44 +52,12 @@ export interface PracticeBarProps {
   /** la tastiera di richiamo e' aperta: il pulsante e' premuto e la tastiera sta sopra */
   keyboardOpen: boolean;
   onKeyboardToggle: () => void;
-  /** le regole che qui non si applicano, con il loro motivo */
-  suspended: Record<string, string>;
-  error: string | null;
 }
 
 const PracticeBar: React.FC<PracticeBarProps> = ({
-  stepIndex, total, measure, expected, status, problem, verdictStep, judging, hands,
-  handsOn, onHandToggle, handsOff, dynamicsOn, onDynamicsChange, keyboardOpen, onKeyboardToggle, suspended, error,
+  problem, judging, hands, handsOn, onHandToggle, handsOff,
+  dynamicsOn, onDynamicsChange, keyboardOpen, onKeyboardToggle,
 }) => {
-  const altraMano = status?.other_hand ?? [];
-  const estranee = status?.extra ?? [];
-
-  // Il titolo del pulsante tastiera porta dentro tutto quello che la riga ha smesso
-  // di mostrare. E' lo stesso principio del pannello sospeso: l'informazione non
-  // deve essere visibile, deve essere disponibile — e un titolo non ruba centimetri
-  // alla partitura, che e' la cosa per cui lo spazio serve.
-  const perche = Object.entries(suspended)
-    .map(([nome, motivo]) => `${nome}: ${motivo}`)
-    .join('\n');
-  const passo = [
-    total > 0 ? `Step ${stepIndex + 1} of ${total}` : '',
-    measure > 0 ? `bar ${measure}` : '',
-    expected.length > 0 ? `press ${expected.map((p) => noteName(p)).join(', ')}` : '',
-    altraMano.length > 0
-      ? `Ignored and not judged: ${altraMano.length} note${altraMano.length > 1 ? 's' : ''} of the other staff`
-      : '',
-    estranee.length > 0
-      ? `Pressed but not asked for: ${estranee.map((p) => noteName(p)).join(', ')}`
-      : '',
-  ].filter(Boolean).join(' · ');
-  const titoloTastiera = [
-    keyboardOpen
-      ? 'Hide the keyboard.'
-      : 'Show the keyboard: the keys of this step light up, middle C is marked.',
-    passo,
-    perche ? `\nNot judged in this mode:\n${perche}` : '',
-  ].filter(Boolean).join('\n');
-
   // ── I due pulsanti della mani, L e R: DUE INTERRUTTORI ──
   // Dal 2026-11-07 le lettere non "scelgono" piu' una mano: ognuna ACCENDE o
   // SPEGNE la propria, indipendentemente dall'altra. Accese tutte e due = brano
@@ -108,34 +69,13 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
   const sel = handSelection(hands, handsOn);
   const rightNotes = hands !== null && hands.right > 0;
   const leftNotes = hands !== null && hands.left > 0;
-  const entrambe = rightNotes && leftNotes;
   // Esattamente un rigo con delle note: allora la lettera dell'altro non ha
   // niente da accendere, e disegnarla vuol dire offrire un tocco che non fa
-  // niente. Si mostra una sola, e il perche' sta nel titolo.
+  // niente. Si mostra una sola, e il perche' lo dice la riga di pausa, non un
+  // tooltip da inseguire col mouse.
   const unaSola = hands !== null && rightNotes !== leftNotes;
   const manoUnica = rightNotes && !leftNotes ? 'right'
     : leftNotes && !rightNotes ? 'left' : null;
-
-  const percheMani = hands === null
-    ? 'Waiting to learn whether this score separates the hands.'
-    : entrambe
-      ? 'L and R are switches, each on its own: lit means that hand takes part, grey means it is off — its staff is not asked for, does not stop the cursor and is not judged. Press a letter to switch just that hand. Both letters on: the whole piece; both off: nothing is asked until one goes back on.'
-      : unaSola
-        // Un pulsante spento che non puo' fare niente deve dire perche': uguale a
-        // uno che non c'e', tranne per lo spazio che occupa.
-        ? `This score has only the ${manoUnica} staff: there is nothing to exclude. Its letter switches the exercise off and on; with it off, nothing is asked or judged.`
-        : 'This file does not declare staves, so there is no right or left hand to isolate: the whole piece is practised.';
-
-  // Le note senza rigo riconosciuto restano nell'esercizio con qualsiasi mano: dirlo
-  // qui, perche' altrimenti un esercizio "a mano destra" che chiede comunque una nota
-  // fuori dai due righi sembra un bug.
-  const senzaRigo = hands !== null && hands.unknown > 0
-    ? ` ${hands.unknown} notes declare no staff: they stay in the exercise with either hand.`
-    : '';
-
-  // Nessun "premi per scegliere": qui ogni lettera vale per la propria mano e
-  // basta. L'accensione dell'altra non spegne questa, e lo stato in pausa ha
-  // una riga sua, non un terzo pulsante.
 
   return (
     <section className="practice-bar" aria-label="Practice controls">
@@ -147,7 +87,6 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
           onClick={onKeyboardToggle}
           aria-pressed={keyboardOpen}
           aria-label="Show the keyboard for this step"
-          title={titoloTastiera}
         >
           <Piano size={16} aria-hidden="true" />
         </button>
@@ -170,9 +109,6 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
           <span
             className={`pb-problem pb-${problem.tone}${problem.stale ? ' pb-stale' : ''}`}
             id="practice-problem"
-            title={problem.stale
-              ? `This verdict belongs to step ${verdictStep + 1}; you are already on step ${stepIndex + 1}.`
-              : error ?? 'The RML verdict on this step'}
           >
             {problem.text ? (
               <>
@@ -192,7 +128,6 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
       <span className="pb-controls">
         <span
           className="pb-seg" role="group" aria-label="Hands to practise"
-          title={`${percheMani}${entrambe ? senzaRigo : ''}`}
         >
           {sel.showLeft && (
             <button
@@ -224,10 +159,6 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
           onClick={() => onDynamicsChange(!dynamicsOn)}
           aria-pressed={dynamicsOn}
           aria-label="Dynamics"
-          title={dynamicsOn
-            ? 'Dynamics is being watched too: the velocity is compared with the dynamics written in the score.'
-            // Spento deve dire cosa non si guarda piu', non limitarsi a spegnersi.
-            : 'Dynamics off: it is no longer shown among the step problems. The notes are still checked, and the service keeps judging dynamics anyway.'}
         >
           D
         </button>

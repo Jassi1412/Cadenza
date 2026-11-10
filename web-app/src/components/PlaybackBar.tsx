@@ -89,7 +89,6 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isPlaying ? 'active' : ''}`}
         onClick={onPlayPause}
         disabled={isLoading || isTakeActive || isPractice}
-        title={isPlaying ? 'Pause' : 'Playback — listening only'}
         id="bar-play-btn"
       >
         <span
@@ -108,7 +107,6 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className="bar-btn"
         onClick={onStop}
         disabled={isLoading}
-        title="Stop & Rewind"
         id="bar-stop-btn"
       >
         <span
@@ -127,7 +125,6 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isTakeActive ? 'practice-active' : ''}`}
         onClick={onPlayAlong}
         disabled={isLoading || isTakeActive || isPractice}
-        title={isTakeActive ? 'Recording in progress' : 'Play along with the score'}
         id="bar-practice-btn"
       >
         <PlayAlongIcon />
@@ -141,7 +138,6 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
         className={`bar-btn ${isPractice ? 'practice-active' : ''}`}
         onClick={isPractice ? onPracticeStop : onPractice}
         disabled={isLoading || isTakeActive}
-        title={isPractice ? 'Exit practice' : 'The piece stands still, one step at a time'}
         id="bar-step-btn"
       >
         <span
