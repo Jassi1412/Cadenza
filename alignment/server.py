@@ -3,7 +3,12 @@
 Tre rotte, tutte POST tranne il GET di cortesia:
 
     /                modalita' normale: spartito + esecuzione intera -> sette
-                     verdetti. E' il verdetto a fine brano.
+                     verdetti. E' il verdetto a fine brano. Accetta `hand` e
+                     `dynamics`: la presa si puo' giudicare su una mano sola e
+                     senza la regola sulla dinamica, come in pratica.
+    /hands           spartito -> cosa si puo' separare (destra, sinistra, misto).
+                     Esiste perche' la presa intera disegni L e R PRIMA di
+                     avere un piano di pratica da cui leggerlo.
     /practice        modalita' practice: spartito -> il PIANO di pratica, cioe'
                      la sequenza dei passi. Si chiama una volta all'apertura.
     /practice/step   modalita' practice: gli eventi suonati davanti a UN passo
@@ -487,8 +492,47 @@ def validate(body):
     return out, cc
 
 
+def _drop_other_hand(model, notes, factor, hand):
+    """Le pressioni dell'altra mano non sono errori: escono dalla traccia.
+
+    Stessa regola di `practice.py` (`offhand`), portata sulla presa intera: un
+    tasto che lo spartito chiede ALL'ALTRA mano in quell'istante non e' ne'
+    atteso ne' sbagliato, e se restasse nella traccia `pitch-agreement` lo
+    conterebbe come stonatura. La mano scelta resta giudicabile per intero; i
+    tasti che non sono di nessuna delle due (una stecca vera) restano, e li
+    giudicano le regole.
+
+    L'appartenenza si legge dal MODELLO COMPLETO, prima di restringerlo con
+    `for_hand`: dopo il filtro l'informazione su chi suonava cosa non c'e' piu'.
+    La battuta e' quella con cui `join()` avrebbe agganciato la nota — stessa
+    scala `time_ms / tempo_factor`, stesso `snap_beat` — cosi' le due fasi
+    parlano dello stesso istante.
+    """
+    wanted = {"right": 1, "left": 2}[hand]
+    by_chord = {}
+    for n in model.notes:
+        by_chord.setdefault(n["chordId"], []).append(n)
+    out = []
+    for p in notes:
+        beat = model.snap_beat(model.beat_at(p["time_ms"] / factor))
+        group = by_chord.get(model.chord_at(beat), [])
+        keep = {n["pitch"] for n in group if n.get("staff") in (wanted, None)}
+        other = {n["pitch"] for n in group
+                 if n.get("staff") not in (wanted, None) and n["pitch"] not in keep}
+        if p["pitch"] in other:
+            continue
+        out.append(p)
+    return out
+
+
 def analyse(body):
     notes, cc = validate(body)
+    hand = _requested_hand(body)
+    # La dinamica si giudica a meno che la pagina non la spenga: e' l'interruttore
+    # D della pratica, portato alla presa intera. Spenta, la regola non gira
+    # proprio: un verdetto che nessuno guarda non deve nemmeno colorare o scalare
+    # il voto.
+    dynamics = body.get("dynamics") is not False
 
     score = scratch_path(".musicxml")
     trace = scratch_path(".jsonl")
@@ -497,10 +541,18 @@ def analyse(body):
             f.write(body["score"])
         model = ScoreModel.from_musicxml(score)
         factor = read_tempo_factor(body)
+        if hand:
+            # Ordine obbligato: prima si tolgono dalla traccia le note dell'altra
+            # mano (servono le appartenenze del modello completo), poi si
+            # restringe il modello che join() interroga.
+            notes = _drop_other_hand(model, notes, factor, hand)
+            model = model.for_hand(hand)
         events = join(model, notes, factor, cc)
         with open(trace, "w", encoding="utf-8") as f:
             f.write(to_jsonl(events) + "\n")
-        verdicts = _run_metrics(trace, METRICS)
+        metrics = METRICS if dynamics else tuple(
+            m for m in METRICS if m != "dynamics-adherence")
+        verdicts = _run_metrics(trace, metrics)
     finally:
         unlink(score)
         unlink(trace)
@@ -636,6 +688,20 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n))
 
             path = self.path.split("?")[0].rstrip("/") or "/"
+            if path == "/hands":
+                # Cosa questo spartito permette di separare, SENZA costruire il
+                # piano dei passi: alla presa intera serve solo per disegnare L e
+                # R — e non disegnare l'interruttore di una mano che non ha note.
+                if not isinstance(body.get("score"), str) or "<" not in body["score"]:
+                    raise ValueError("missing MusicXML score")
+                score_path = scratch_path(".musicxml")
+                try:
+                    with open(score_path, "w", encoding="utf-8") as f:
+                        f.write(body["score"])
+                    hands = hand_summary(ScoreModel.from_musicxml(score_path))
+                finally:
+                    unlink(score_path)
+                return self._send(200, {"hands": hands})
             if path == "/practice":
                 if not isinstance(body.get("score"), str) or "<" not in body["score"]:
                     raise ValueError("missing MusicXML score")

@@ -63,6 +63,70 @@ export interface PerformancePayload {
   tempo_factor: number;
 }
 
+/** La mano che la presa deve giudicare: null = il brano intero. */
+export type HandFilter = 'left' | 'right' | null;
+
+/** Il riassunto delle mani di uno spartito (lo stesso che manda `/practice`). */
+export interface HandSummary {
+  right: number;
+  left: number;
+  unknown: number;
+  split: boolean;
+}
+
+/** Le due scelte che la presa eredita dagli interruttori della pratica. */
+export interface VerdictBodyOptions {
+  hand?: HandFilter;
+  dynamics?: boolean;
+}
+
+/**
+ * Il corpo di `POST /`, in un punto solo e provabile senza rete.
+ *
+ * `hand` e `dynamics` filtrano il GIUDIZIO, non la vista: il servizio costruisce
+ * la traccia sulla sola mano scelta e salta del tutto la regola della dinamica.
+ * I nomi sono quelli che `server.py` valida ('both' | 'right' | 'left'), e
+ * 'both' e' esplicito perche' il servizio rifiuta un valore sconosciuto invece
+ * di ripiegare in silenzio sul brano intero.
+ */
+export function verdictBody(
+  scoreXml: string,
+  performance: PerformancePayload,
+  opts: VerdictBodyOptions = {},
+): { score: string; hand: 'both' | 'left' | 'right'; dynamics: boolean } & PerformancePayload {
+  return {
+    score: scoreXml,
+    ...performance,
+    hand: opts.hand ?? 'both',
+    dynamics: opts.dynamics !== false,
+  };
+}
+
+/**
+ * Cosa questo spartito permette di separare, senza costruire il piano di
+ * pratica. Null se il servizio non risponde: la striscia semplicemente non si
+ * disegna e la presa resta quella intera — un errore qui non deve impedire di
+ * suonare.
+ */
+export async function fetchHands(scoreXml: string): Promise<HandSummary | null> {
+  try {
+    const res = await fetch(`${API_URL}/hands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: scoreXml }),
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const hands = payload?.hands;
+    if (!hands || typeof hands.right !== 'number' || typeof hands.left !== 'number') {
+      return null;
+    }
+    return hands as HandSummary;
+  } catch {
+    return null;
+  }
+}
+
 /** Soglia sotto la quale una nota non e' mai stata suonata davvero. */
 const MIN_DURATION_MS = 30;
 
@@ -193,7 +257,12 @@ export interface UseVerdictReturn {
    * MIDI sono relativi alla navigazione, lo spartito conta da 0. Vedi
    * `toPerformance`: senza, ogni nota finisce sull'ultimo attacco.
    */
-  analyse: (scoreXml: string, tempoFactor?: number, originMs?: number) => Promise<void>;
+  analyse: (
+    scoreXml: string,
+    tempoFactor?: number,
+    originMs?: number,
+    opts?: VerdictBodyOptions,
+  ) => Promise<void>;
   reset: () => void;
 }
 
@@ -208,7 +277,12 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [correct, setCorrect] = useState<ScoreLocation[] | null>(null);
   const busy = useRef(false);
 
-  const analyse = useCallback(async (scoreXml: string, tempoFactor = 1.0, originMs = 0) => {
+  const analyse = useCallback(async (
+    scoreXml: string,
+    tempoFactor = 1.0,
+    originMs = 0,
+    opts: VerdictBodyOptions = {},
+  ) => {
     if (busy.current) return;
     const { notes, control_changes, tempo_factor } = toPerformance(events, tempoFactor, originMs);
     if (notes.length === 0) {
@@ -224,7 +298,9 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score: scoreXml, notes, control_changes, tempo_factor }),
+        body: JSON.stringify(verdictBody(
+          scoreXml, { notes, control_changes, tempo_factor }, opts,
+        )),
       });
       const payload = await response.json();
       if (!response.ok) {

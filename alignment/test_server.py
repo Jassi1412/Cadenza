@@ -432,6 +432,68 @@ try:
     if not err and res and not any(v["exit"] == 1 for v in res["verdicts"].values()):
         check("sulla prova perfetta nessuna posizione", True)
 
+    # ---- la presa intera con UNA MANO e SENZA DINAMICA (richiesta 2026-11-10).
+    #
+    # Sono gli stessi due comandi della pratica, portati a fine brano: L/R
+    # scelgono il rigo da giudicare, D decide se dynamics-adherence entra nel
+    # verdetto. La prova qua sotto e' la stessa esecuzione "pulita" di prima,
+    # che suona TUTTE E DUE le mani: se il filtro non togliesse le note
+    # dell'altra mano, pitch-agreement le accuserebbe subito.
+    print("\n=== POST /hands : cosa si puo' separare ===")
+    hm, ms, err = post("/hands", {"score": score_xml})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("/hands risponde", False)
+    else:
+        mani = hm.get("hands") or {}
+        print("  %s in %.0f ms" % (mani, ms))
+        check("/hands dichiara le due mani e il file le separa",
+              mani.get("split") is True and mani.get("right", 0) > 0
+              and mani.get("left", 0) > 0 and mani.get("unknown") == 0)
+        check("/hands non costruisce il piano: nessun elenco di passi",
+              "steps" not in hm)
+
+    print("\n=== POST / : la presa giudicata sulla mano sinistra ===")
+    sx_plan, _, err_sx = post("/practice", {"score": score_xml, "hand": "left"})
+    if err_sx or not sx_plan:
+        check("il piano della sinistra e' disponibile", False)
+    else:
+        attacchi_sx = {s["attack"] for s in sx_plan["steps"]}
+        sola, ms, err = post("/", {"score": score_xml, "notes": notes,
+                                   "control_changes": [], "tempo_factor": 1.0,
+                                   "hand": "left", "dynamics": False})
+        if err:
+            print("  ERRORE: %s" % err)
+            check("la presa per mano risponde", False)
+        else:
+            rossi, verdi = set(), set()
+            for v in sola["verdicts"].values():
+                for l in v.get("locations") or []:
+                    if isinstance(l.get("attack"), int):
+                        rossi.add(l["attack"])
+            verdi = {l.get("attack") for l in sola.get("correct") or []}
+            print("  %d rossi, %d verdi in %.0f ms" % (len(rossi), len(verdi), ms))
+            check("con una mano nessun punto rosso cade fuori da quella mano",
+                  rossi <= attacchi_sx, sorted(rossi - attacchi_sx)[:6])
+            check("con una mano nessun verde cade fuori da quella mano",
+                  verdi <= attacchi_sx, sorted(verdi - attacchi_sx)[:6])
+            check("la mano sinistra e' giudicata davvero: qualche verde",
+                  len(verdi) > 0)
+            check("pitch-agreement non accusa le note dell'altra mano",
+                  (sola["verdicts"].get("pitch-agreement") or {}).get("exit") == 0)
+            check("la mano non suonata in questa presa non diventa 'never played'",
+                  "never played" not in sola["verdicts"])
+            check("con D spento la regola della dinamica non compare",
+                  "dynamics-adherence" not in sola["verdicts"])
+            check("con D acceso la regola della dinamica c'e', e ha giudicato",
+                  res is not None and "dynamics-adherence" in res["verdicts"]
+                  and res["verdicts"]["dynamics-adherence"]["exit"] in (0, 1))
+
+    _, _, err = post("/", {"score": score_xml, "notes": notes, "hand": "destra"})
+    print("\n=== POST / : mano scritta male ===")
+    print("  risposta: %s" % (err or "(nessun errore!)").strip()[:140])
+    check("una mano sconosciuta e' un 400 anche nella presa intera", err is not None)
+
 finally:
     proc.terminate()
     try:

@@ -570,6 +570,34 @@ class ScoreModel:
         """Numero di misura 1-indexato, dalle battute e dal tempo."""
         return int(beat // 2) + 1  # 2/2: due battute per misura
 
+    def for_hand(self, hand):
+        """Lo stesso spartito, con una sola mano giudicabile.
+
+        NON si rinumerano le posizioni. `_onsets`, `_anch_beats` e `_anch_ms`
+        restano quelli del brano completo perche' l'indice d'attacco (`chordId`)
+        e' il numero con cui la pagina cammina il cursore sullo spartito intero:
+        rinumerare qui vorrebbe dire colorare la nota sbagliata in ogni brano con
+        due righi. Cambia solo cio' che si ASPETTA: le note dell'altra mano escono
+        da `notes` (quindi da `score_pitches_at` e da `chord_mates`), e un istante
+        in cui la mano scelta non suona resta un attacco con la lista vuota, che
+        la copertura salta invece di dichiararlo "never played".
+
+        Le note senza rigo riconosciuto restano: e' la stessa regola del piano di
+        pratica — escludere una nota senza certezza vorrebbe dire chiedere
+        all'allievo un tasto che nessuno sa a chi appartiene.
+        """
+        wanted = {"right": 1, "left": 2}.get(hand)
+        if wanted is None:
+            return self
+        kept = [n for n in self.notes if n.get("staff") in (wanted, None)]
+        view = ScoreModel.__new__(ScoreModel)
+        view.__dict__ = dict(self.__dict__)
+        view.notes = kept
+        view._group_pitches = {}
+        for n in kept:
+            view._group_pitches.setdefault(n["chordId"], []).append(n["pitch"])
+        return view
+
     def attacks(self):
         """Gli attacchi dello spartito, in ordine cronologico.
 

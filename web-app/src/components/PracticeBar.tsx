@@ -52,11 +52,18 @@ export interface PracticeBarProps {
   /** la tastiera di richiamo e' aperta: il pulsante e' premuto e la tastiera sta sopra */
   keyboardOpen: boolean;
   onKeyboardToggle: () => void;
+  /**
+   * Nella PRESA INTERA la striscia c'e' ma il pulsante della tastiera no: li' non
+   * c'e' nessun passo da accendere, e una tastiera senza passo sarebbe un disegno
+   * che mente. Default true: la pratica lo mostra sempre.
+   */
+  showKeyboardToggle?: boolean;
 }
 
 const PracticeBar: React.FC<PracticeBarProps> = ({
   problem, judging, hands, handsOn, onHandToggle, handsOff,
   dynamicsOn, onDynamicsChange, keyboardOpen, onKeyboardToggle,
+  showKeyboardToggle = true,
 }) => {
   // ── I due pulsanti della mani, L e R: DUE INTERRUTTORI ──
   // Dal 2026-11-07 le lettere non "scelgono" piu' una mano: ognuna ACCENDE o
@@ -81,15 +88,17 @@ const PracticeBar: React.FC<PracticeBarProps> = ({
     <section className="practice-bar" aria-label="Practice controls">
       <span className="pb-left">
         {/* Il pulsante che apre la tastiera: e' lui il contatore dei tasti, adesso. */}
-        <button
-          id="bar-keys-btn"
-          className={`pb-icon${keyboardOpen ? ' pb-icon-on' : ''}`}
-          onClick={onKeyboardToggle}
-          aria-pressed={keyboardOpen}
-          aria-label="Show the keyboard for this step"
-        >
-          <Piano size={16} aria-hidden="true" />
-        </button>
+        {showKeyboardToggle && (
+          <button
+            id="bar-keys-btn"
+            className={`pb-icon${keyboardOpen ? ' pb-icon-on' : ''}`}
+            onClick={onKeyboardToggle}
+            aria-pressed={keyboardOpen}
+            aria-label="Show the keyboard for this step"
+          >
+            <Piano size={16} aria-hidden="true" />
+          </button>
+        )}
 
         {/* Il verdetto compatto: una parola, e nessuna parola quando non c'e' ancora
             niente da dire. `judging` non scrive "verifico…": lo dice il punto che

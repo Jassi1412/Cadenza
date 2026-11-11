@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
-import { useVerdict } from '../hooks/useVerdict';
+import { useVerdict, fetchHands, type HandSummary, type VerdictBodyOptions } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
 import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, summaryLines, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
@@ -475,11 +475,19 @@ const ScorePage: React.FC = () => {
   // "never played" quasi ovunque e nessun verde (misurato il 2026-11-10 sulla
   // stessa esecuzione: a tempi relativi 128 verdi, traslati di 60 s 0 verdi).
   const takeStartRef = useRef<number | null>(null);
+  // Le scelte che la presa porta con se': quale mano si fa giudicare e se la
+  // dinamica entra nel verdetto. Vivono in un ref perche' `runAnalysis` le legge
+  // alla fine della presa: metterle in una dipendenza cambierebbe l'identita' di
+  // `finishPlayAlong` a ogni click sugli interruttori, e l'effetto di fine-presa
+  // si resetterebbe (stessa ragione di `verdictRef`).
+  const takeFilterRef = useRef<VerdictBodyOptions>({ hand: null, dynamics: true });
   const runAnalysis = useCallback(async () => {
     if (!file) return;
     try {
       const scoreXml = await file.text();
-      await verdictRef.current.analyse(scoreXml, scoreBpm / bpm, takeStartRef.current ?? 0);
+      await verdictRef.current.analyse(
+        scoreXml, scoreBpm / bpm, takeStartRef.current ?? 0, takeFilterRef.current,
+      );
     } catch (err) {
       console.error('[ScorePage] Non sono riuscito a leggere lo spartito:', err);
     }
@@ -517,7 +525,17 @@ const ScorePage: React.FC = () => {
     const p = loadPracticePrefs();
     return { left: p.left, right: p.right };
   });
-  const handSel = handSelection(practice.hands, handsOn);
+  // Cosa si puo' separare: in pratica lo dice il piano, che lo porta gia' con
+  // se'; nella presa intera lo chiede `/hands` una volta sola all'apertura dello
+  // spartito (`fetchHands`, sotto). La formula dei due interruttori e' la stessa
+  // nei due modi, cosi' L e R non possono significare due cose diverse.
+  const [scoreHands, setScoreHands] = useState<HandSummary | null>(null);
+  const hands = isPractice ? practice.hands : scoreHands;
+  const handSel = handSelection(hands, handsOn);
+  takeFilterRef.current = {
+    hand: handSel.target === 'both' ? null : handSel.target,
+    dynamics: practice.dynamicsOn,
+  };
 
   /**
    * La tastiera di richiamo, aperta o chiusa dal pulsante a forma di pianoforte.
@@ -681,9 +699,11 @@ const ScorePage: React.FC = () => {
   // significa togliere la classe. Uscire dalla pratica o rientrarvi la toglie
   // da ogni rigo: fuori dalla pratica nessun rigo e' mai "spento".
   useEffect(() => {
-    const gray = staffGray(practice.hands, handsOn);
+    // In pratica le mani sono quelle del piano, nella presa intera quelle di
+    // `/hands`: il grigio deve raccontare la stessa scelta in tutti e due i modi.
+    const gray = staffGray(hands, handsOn);
     const apply = () => {
-      for (const [suffix, off] of [['-1', isPractice && gray.upper], ['-2', isPractice && gray.lower]] as const) {
+      for (const [suffix, off] of [['-1', gray.upper], ['-2', gray.lower]] as const) {
         for (const g of document.querySelectorAll<SVGGElement>(`#sheet-container g.staffline[id$="${suffix}"]`)) {
           g.classList.toggle('osmd-staff-off', off);
         }
@@ -696,7 +716,7 @@ const ScorePage: React.FC = () => {
     const reapply = () => apply();
     window.addEventListener('resize', reapply);
     return () => window.removeEventListener('resize', reapply);
-  }, [isPractice, practice.hands, handsOn]);
+  }, [hands, handsOn]);
 
   // Il cursore e' avanzato: il prossimo passo comincia da dove siamo ora.
   //
@@ -843,6 +863,20 @@ const ScorePage: React.FC = () => {
     };
   }, []);
 
+  // Cosa questo spartito permette di separare: si chiede UNA volta, appena il
+  // file e' noto. Serve alla striscia della presa intera, che deve disegnare L e
+  // R prima che esista un piano di pratica. Un fallimento non ferma niente: la
+  // striscia non compare e la presa giudica il brano intero.
+  useEffect(() => {
+    if (!file) return;
+    let alive = true;
+    void file.text()
+      .then((xml) => fetchHands(xml))
+      .then((h) => { if (alive) setScoreHands(h); })
+      .catch(() => { /* niente striscia: la presa resta intera */ });
+    return () => { alive = false; };
+  }, [file]);
+
   // Re-enable MIDI from upload page state
   useEffect(() => {
     if (midiEnabled && !midi.isEnabled) {
@@ -868,6 +902,10 @@ const ScorePage: React.FC = () => {
   const handlePlayAlong = useCallback(async () => {
     const player = playerRef.current;
     if (!player || isLoading) return;
+    // Tutte e due le mani spente = pausa voluta, come in pratica: non c'e'
+    // niente da giudicare, e far partire una presa che non giudichera' nessuna
+    // nota sarebbe un pulsante che mente.
+    if (handSel.paused) return;
     if (!midi.isEnabled) {
       await midi.enable();
       // L'input MIDI si popola al tick successivo: senza questa attesa i primi
@@ -890,7 +928,7 @@ const ScorePage: React.FC = () => {
     // Il click sul "3" si sente subito: qui c'è ancora il gesto utente che
     // autorizza l'audio, dopo sarà troppo tardi per lo sblocco del contesto.
     playTick(false);
-  }, [isLoading, midi, verdict]);
+  }, [isLoading, midi, verdict, handSel.paused]);
 
   /**
    * Il countdown tiene premuto il musicista al tastierino, poi parte tutto.
@@ -1329,6 +1367,30 @@ const ScorePage: React.FC = () => {
         )
       )}
 
+      {/* La stessa striscia della pratica, nella presa intera (richiesta
+          2026-11-10): L e R dicono quale mano si fa giudicare, D se la dinamica
+          entra nel verdetto. Il pulsante della tastiera non c'e': qui non c'e'
+          nessun passo da accendere, e una tastiera senza passo sarebbe un
+          disegno che mente. */}
+      {!isPractice && !isLoading && scoreHands && (
+        <PracticeBar
+          problem={stepProblem({
+            last: null, stepIndex: 0, judging: false, error: null,
+            dynamicsOn: practice.dynamicsOn,
+          })}
+          judging={false}
+          hands={scoreHands}
+          handsOn={handsOn}
+          onHandToggle={(h) => setHandsOn((s) => ({ ...s, [h]: !s[h] }))}
+          handsOff={handSel.paused}
+          dynamicsOn={practice.dynamicsOn}
+          onDynamicsChange={practice.setDynamicsOn}
+          keyboardOpen={keyboardOpen}
+          onKeyboardToggle={() => setKeyboardOpen((v) => !v)}
+          showKeyboardToggle={false}
+        />
+      )}
+
       {/* Score Container */}
       <div className="score-container">
         {isLoading && (
@@ -1389,6 +1451,7 @@ const ScorePage: React.FC = () => {
           onPlayPause={handlePlayPause}
           onStop={isPractice ? stopPractice : handleStop}
           onPlayAlong={handlePlayAlong}
+          playAlongDisabled={handSel.paused}
           bpm={bpm}
           scoreBpm={scoreBpm}
           onBpmChange={setBpm}

@@ -27,6 +27,8 @@ interface PlaybackBarProps {
   isPractice: boolean;
   onPractice: () => void;
   onPracticeStop: () => void;
+  /** Nella presa intera: le mani sono tutte e due spente, non c'e' niente da giudicare. */
+  playAlongDisabled?: boolean;
 }
 
 /** Stopwatch SVG — the play-along button */
@@ -71,6 +73,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
   isPractice,
   onPractice,
   onPracticeStop,
+  playAlongDisabled = false,
 }) => {
   const slowed = bpm < scoreBpm;
 
@@ -124,7 +127,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
       <button
         className={`bar-btn ${isTakeActive ? 'practice-active' : ''}`}
         onClick={onPlayAlong}
-        disabled={isLoading || isTakeActive || isPractice}
+        disabled={isLoading || isTakeActive || isPractice || playAlongDisabled}
         id="bar-practice-btn"
       >
         <PlayAlongIcon />

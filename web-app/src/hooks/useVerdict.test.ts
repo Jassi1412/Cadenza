@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { toPerformance } from './useVerdict';
+import { describe, expect, it, vi } from 'vitest';
+import { fetchHands, toPerformance, verdictBody } from './useVerdict';
 import type { MidiEvent } from './useMidi';
 
 const on = (timestamp: number, note: number, rawAttack: number): MidiEvent =>
@@ -98,5 +98,47 @@ describe('toPerformance', () => {
   it('senza origine il payload resta quello di sempre: chi manda tempi da zero non cambia', () => {
     const { notes } = toPerformance([on(0, 60, 90), off(250, 60)]);
     expect(notes).toEqual([{ time_ms: 0, dur_ms: 250, pitch: 60, velocity: 90 }]);
+  });
+});
+
+describe('corpo della presa e mani dello spartito', () => {
+  const perf = {
+    notes: [{ time_ms: 0, dur_ms: 250, pitch: 60, velocity: 90 }],
+    control_changes: [],
+    tempo_factor: 2,
+  };
+
+  it('i due filtri della striscia viaggiano nel corpo di POST /', () => {
+    // E' la stessa coppia di comandi della pratica: L/R scelgono la mano da
+    // giudicare, D decide se la regola della dinamica entra nel verdetto.
+    expect(verdictBody('<score/>', perf, { hand: 'left', dynamics: false }))
+      .toEqual({
+        score: '<score/>', ...perf, hand: 'left', dynamics: false,
+      });
+  });
+
+  it('senza scelte la presa e\' intera e la dinamica si giudica', () => {
+    const body = verdictBody('<score/>', perf);
+    expect(body.hand).toBe('both');
+    expect(body.dynamics).toBe(true);
+  });
+
+  it('legge il riassunto delle mani da /hands', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ hands: { right: 128, left: 88, unknown: 0, split: true } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchHands('<score/>')).resolves
+      .toEqual({ right: 128, left: 88, unknown: 0, split: true });
+    expect(fetchMock.mock.calls[0][0]).toContain('/hands');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ score: '<score/>' });
+    vi.unstubAllGlobals();
+  });
+
+  it('se /hands non risponde non inventa mani: null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    await expect(fetchHands('<score/>')).resolves.toBeNull();
+    vi.unstubAllGlobals();
   });
 });
