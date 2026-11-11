@@ -430,6 +430,39 @@ def _detail_for(rule, ev):
     return None  # un numero mancante non e' un verdetto: la riga sta senza valori
 
 
+def _chord_anchor(ids, events):
+    """Il punto di chord-jitter e' un ACCORDO, mai una nota senza compagni.
+
+    La macchina RML si ferma sul primo evento che non riesce a leggere DOPO
+    aver consumato un gruppo; quando l'accordo e' arrivato sparpagliato, quel
+    primo evento e' la nota SUCCESSIVA. Misurato sul Warmup l'11-11-2026:
+    accordo di sinistra arpeggiato 0/20/40 ms, oppure destra e sinistra non
+    simultanee di 40 ms sul battere, e chord-jitter puntava alla SECONDA nota
+    di destra (beat 1, `chordMates: []`), sola: l'utente vedeva il jitter su
+    una nota che non ha nessun accordo mentre la violazione era sul battere.
+
+    Una nota con `chordMates` vuoto non puo' violare questa regola (la regola
+    la lascia passare come soloNote): il punto vero e' l'ultimo attacco CON
+    compagni prima di lei. Se non ce n'e' nessuno, l'indice si perde e la
+    violazione resta dichiarata senza punto, invece di accusare una nota a
+    caso.
+    """
+    out = []
+    for i in ids:
+        if not 0 <= i < len(events):
+            continue
+        if (events[i].get("expected") or {}).get("chordMates"):
+            out.append(i)
+            continue
+        for j in range(i - 1, -1, -1):
+            prev = events[j]
+            if (prev.get("type") == "noteon"
+                    and (prev.get("expected") or {}).get("chordMates")):
+                out.append(j)
+                break
+    return out
+
+
 def _locations(ids, events, rule=None):
     """Gli indici di batch.pl tradotti nei punti dello spartito.
 
@@ -442,10 +475,13 @@ def _locations(ids, events, rule=None):
     non e' un ponte affidabile fra i due mondi (octave-shift, sempre li').
     Qui si legge soltanto: niente calcoli, niente soglie.
 
-    Il `rule` serve solo a scegliere se allegare i numeri nudi (`_detail_for`):
-    la stessa riga della traccia sa gia' entrambi i valori, qui non si giudica
-    e non si confronta niente.
+    Il `rule` serve solo a scegliere se allegare i numeri nudi (`_detail_for`)
+    e a riportare chord-jitter sull'accordo invece che sulla nota successiva
+    (vedi `_chord_anchor`): la stessa riga della traccia sa gia' entrambi i
+    valori, qui non si giudica e non si confronta niente.
     """
+    if rule == "chord-jitter":
+        ids = _chord_anchor(ids, events)
     locs, seen = [], set()
     for i in ids:
         if not 0 <= i < len(events):

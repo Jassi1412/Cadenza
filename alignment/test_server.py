@@ -473,6 +473,38 @@ try:
         check("una nota anticipata non eredita l'accordo della mano tenuta",
               cj.get("exit") == 0)
 
+    # ---- lo stesso gruppo quando l'accordo di sinistra e' ARPEGGIATO: la
+    #      regola ha ragione (le note del battere non sono insieme), ma deve
+    #      puntare l'accordo, non la nota sola che viene dopo. Prima la
+    #      macchina RML, fermandosi dopo il gruppo, riportava la seconda nota
+    #      di destra: l'utente vedeva "chord jitter" su una nota singola
+    #      (segnalato l'11-11-2026).
+    print("\n=== POST / : chord-jitter punta l'accordo, non la nota dopo ===")
+    warm_roll = []
+    for onset, pitches in wmodel.attacks():
+        at = wmodel.ms_at(onset) * 2.0
+        for p in pitches:
+            shift = {36: 0, 40: 20, 43: 40}.get(p, 0) if onset == 0.0 else 0
+            warm_roll.append({"time_ms": at + shift, "dur_ms": 500,
+                              "pitch": p, "velocity": 80})
+    roll, ms, err = post("/", {"score": warm_xml, "notes": warm_roll,
+                               "control_changes": [], "tempo_factor": 2.0,
+                               "dynamics": False})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la presa arpeggiata del Warmup risponde", False)
+    else:
+        cj = roll["verdicts"].get("chord-jitter") or {}
+        locs = cj.get("locations") or []
+        print("  chord-jitter exit %s, punti %s in %.0f ms"
+              % (cj.get("exit"), [(l.get("measure"), l.get("beat"), l.get("attack"))
+                                  for l in locs], ms))
+        check("un accordo arpeggiato e' jitter, e il punto e' il suo attacco",
+              cj.get("exit") == 1 and len(locs) > 0
+              and all(l.get("attack") == 0 for l in locs))
+        check("la nota sola dopo l'accordo non viene accusata",
+              all(l.get("attack") != 1 for l in locs))
+
     print("\n=== POST /hands : cosa si puo' separare ===")
     hm, ms, err = post("/hands", {"score": score_xml})
     if err:
