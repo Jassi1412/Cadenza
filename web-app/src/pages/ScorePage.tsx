@@ -458,15 +458,32 @@ const ScorePage: React.FC = () => {
   // decided here: this hook only carries the performance over and reads the
   // answer back.
   const verdict = useVerdict(midi.recording);
+  // `verdict` è un oggetto nuovo a ogni render (lo costruisce il hook). Se lo si
+  // mette nelle dipendenze di `runAnalysis`/`finishPlayAlong`, quegli stessi
+  // callback cambiano identità a ogni render — e l'effetto di fine-presa, che li
+  // cita, si resetta: azzera l'odometro `percorso`, il flag `chiuso` e
+  // ricancia l'animation-frame a ogni frame di playback. La presa non chiude più
+  // per "salto di loop a traccia consumata" e l'overlay del voto non appare.
+  // Il ref tiene sempre l'ultima versione senza reinnescare nulla.
+  const verdictRef = useRef(verdict);
+  verdictRef.current = verdict;
+  // L'istante in cui il brano comincia davvero (il "Go" del countdown), letto
+  // sullo stesso orologio dei timestamp MIDI: DOMHighResTimeStamp, ms dalla
+  // navigazione della pagina. La registrazione parte prima, col countdown, e
+  // Web MIDI data gli eventi con quell'orologio assoluto mentre lo spartito
+  // conta da 0: senza questa sottrazione ogni nota cade sull'ultimo attacco,
+  // "never played" quasi ovunque e nessun verde (misurato il 2026-11-10 sulla
+  // stessa esecuzione: a tempi relativi 128 verdi, traslati di 60 s 0 verdi).
+  const takeStartRef = useRef<number | null>(null);
   const runAnalysis = useCallback(async () => {
     if (!file) return;
     try {
       const scoreXml = await file.text();
-      await verdict.analyse(scoreXml, scoreBpm / bpm);
+      await verdictRef.current.analyse(scoreXml, scoreBpm / bpm, takeStartRef.current ?? 0);
     } catch (err) {
       console.error('[ScorePage] Non sono riuscito a leggere lo spartito:', err);
     }
-  }, [file, verdict, scoreBpm, bpm]);
+  }, [file, scoreBpm, bpm]);
 
   // ── Modalità a passi ───────────────────────────────────────────────
   //
@@ -860,6 +877,7 @@ const ScorePage: React.FC = () => {
     player.pause();
     player.rewind();
     midi.clearRecording();
+    takeStartRef.current = null;
     // Il referto della prova precedente resta sulla pagina finché l'utente non
     // ricomincia da capo, e "Play along" E quel riavvio: qui carta, rossi e
     // verdi se ne vanno insieme (richiesta 2026-11-10). Il voto nuovo non deve
@@ -890,6 +908,9 @@ const ScorePage: React.FC = () => {
       }, COUNTDOWN_STEP_MS);
       return () => clearTimeout(timer);
     }
+    // Il brano parte ADESSO: e' l'origine dei tempi della presa, e va letta
+    // prima di play(), dallo stesso orologio dei timestamp MIDI.
+    takeStartRef.current = performance.now();
     playerRef.current?.play();
     setIsPlaying(true);
     setPhase('playing');

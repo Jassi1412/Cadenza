@@ -73,4 +73,30 @@ describe('toPerformance', () => {
     expect(notes[0]).toMatchObject({ pitch: 60, dur_ms: 300 });
     expect(notes[1]).toMatchObject({ pitch: 64, dur_ms: 280 });
   });
+
+  // Il difetto che rendeva inutile tutto il resto (2026-11-10): il browser data
+  // i MIDI con DOMHighResTimeStamp, ms dalla navigazione, mentre lo spartito e
+  // il servizio contano da 0. Senza sottrarre l'istante del "Go" ogni nota
+  // finiva sull'ultimo attacco: "never played" quasi ovunque, nessun verde.
+  it('i timestamp assoluti della pagina diventano relativi all\'istante del "Go"', () => {
+    const { notes } = toPerformance([on(42500, 60, 90), off(42750, 60)], 1, 42000);
+    expect(notes).toEqual([{ time_ms: 500, dur_ms: 250, pitch: 60, velocity: 90 }]);
+  });
+
+  it('quello che si preme durante il countdown non entra nella presa', () => {
+    const { notes } = toPerformance([
+      on(41500, 72, 80), off(41600, 72), on(42100, 60, 90), off(42300, 60),
+    ], 1, 42000);
+    expect(notes).toEqual([{ time_ms: 100, dur_ms: 200, pitch: 60, velocity: 90 }]);
+  });
+
+  it('anche i control change seguono l\'istante del "Go"', () => {
+    const { control_changes } = toPerformance([cc(42100, 64, 127), cc(41500, 64, 0)], 1, 42000);
+    expect(control_changes).toEqual([{ time_ms: 100, controller: 64, value: 127 }]);
+  });
+
+  it('senza origine il payload resta quello di sempre: chi manda tempi da zero non cambia', () => {
+    const { notes } = toPerformance([on(0, 60, 90), off(250, 60)]);
+    expect(notes).toEqual([{ time_ms: 0, dur_ms: 250, pitch: 60, velocity: 90 }]);
+  });
 });

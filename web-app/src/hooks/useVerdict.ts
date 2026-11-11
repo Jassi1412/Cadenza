@@ -87,13 +87,21 @@ function isNoteOff(event: MidiEvent): boolean {
  * tenuta e' informazione, e soprattutto buttarla nasconderebbe proprio il caso
  * che la regola di legatura deve vedere.
  *
- * ponytail: i timestamp sono relativi alla pagina (DOMHighResTimeStamp).
- * L'allineatore ricava la scala dal fondo, quindi l'origine non conta. Passare
- * a tempo assoluto serve solo se un giorno dovessi confrontare due prove.
+ * L'ORIGINE NON E' UN DETTAGLIO. Web MIDI data ogni evento con un
+ * DOMHighResTimeStamp relativo alla NAVIGAZIONE della pagina (secondi o minuti,
+ * non zero), mentre lo spartito e il servizio contano da 0: senza sottrarre
+ * `originMs` ogni nota cadeva sull'ultimo attacco del brano. Misurato il
+ * 2026-11-10 sulla stessa esecuzione reale: con i tempi a partire da zero 128
+ * verdi e zero rossi; traslandoli di 60 s, 127 "never played", un rosso
+ * sull'ultimo attacco e nessun verde. `originMs` e' l'istante in cui il brano
+ * e' partito davvero (il "Go" del countdown), letto dallo stesso orologio dei
+ * timestamp MIDI; tutto cio' che arriva PRIMA e' il countdown, non la presa, e
+ * viene scartato.
  */
 export function toPerformance(
   events: readonly MidiEvent[],
   tempoFactor = 1.0,
+  originMs = 0,
 ): PerformancePayload {
   const notes: PerformedNote[] = [];
   const control_changes: ControlChange[] = [];
@@ -103,12 +111,14 @@ export function toPerformance(
   let last = 0;
 
   for (const event of events) {
-    last = event.timestamp;
+    if (event.timestamp < originMs) continue; // prima del brano: e' il countdown
+    const t = event.timestamp - originMs;
+    last = t;
     const pitch = event.note;
 
     if (event.type === 'controlchange') {
       if (event.controller === undefined || event.value === undefined) continue;
-      control_changes.push({ time_ms: event.timestamp, controller: event.controller, value: event.value });
+      control_changes.push({ time_ms: t, controller: event.controller, value: event.value });
       continue;
     }
 
@@ -119,7 +129,7 @@ export function toPerformance(
       const attack = queue?.shift();
       if (queue && queue.length === 0) pending.delete(pitch);
       if (attack === undefined) continue; // note-off senza attacco: nulla da chiudere
-      const dur = event.timestamp - attack.time_ms;
+      const dur = t - attack.time_ms;
       // La nota entra anche se e' stata tenuta pochissimo.
       //
       // Qui prima c'era un filtro: sotto i 30 ms la nota non veniva registrata.
@@ -137,7 +147,7 @@ export function toPerformance(
     }
 
     const queue = pending.get(pitch) ?? [];
-    queue.push({ time_ms: event.timestamp, velocity: event.rawAttack ?? 64 });
+    queue.push({ time_ms: t, velocity: event.rawAttack ?? 64 });
     pending.set(pitch, queue);
   }
 
@@ -178,7 +188,12 @@ export interface UseVerdictReturn {
    * planMarks, che li tinge di verde dove nessun rosso c'e'.
    */
   correct: ScoreLocation[] | null;
-  analyse: (scoreXml: string, tempoFactor?: number) => Promise<void>;
+  /**
+   * `originMs` = l'istante del "Go" sull'orologio della pagina: i timestamp
+   * MIDI sono relativi alla navigazione, lo spartito conta da 0. Vedi
+   * `toPerformance`: senza, ogni nota finisce sull'ultimo attacco.
+   */
+  analyse: (scoreXml: string, tempoFactor?: number, originMs?: number) => Promise<void>;
   reset: () => void;
 }
 
@@ -193,9 +208,9 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [correct, setCorrect] = useState<ScoreLocation[] | null>(null);
   const busy = useRef(false);
 
-  const analyse = useCallback(async (scoreXml: string, tempoFactor = 1.0) => {
+  const analyse = useCallback(async (scoreXml: string, tempoFactor = 1.0, originMs = 0) => {
     if (busy.current) return;
-    const { notes, control_changes, tempo_factor } = toPerformance(events, tempoFactor);
+    const { notes, control_changes, tempo_factor } = toPerformance(events, tempoFactor, originMs);
     if (notes.length === 0) {
       setError('Nothing was recorded: play the piece before asking for a verdict.');
       setStatus('error');
