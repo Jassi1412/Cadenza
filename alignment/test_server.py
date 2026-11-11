@@ -506,6 +506,31 @@ try:
         check("l'accordo di sinistra mancante e' dichiarato never played",
               any(l.get("attack") == 0 for l in missing))
 
+    # ---- 40 ms fra le due mani: con la tolleranza umana di 50 ms l'accordo
+    #      e' ancora insieme. Il jitter deve scattare solo oltre la soglia.
+    print("\n=== POST / : un offset di 40 ms e' ancora insieme ===")
+    warm_soft = []
+    for cid, (onset, _pitches) in enumerate(wmodel.attacks()):
+        at = wmodel.ms_at(onset) * 2.0
+        for n in wmodel.notes:
+            if n["chordId"] != cid:
+                continue
+            shift = 40.0 if (cid == 0 and n["pitch"] == 60) else 0.0
+            warm_soft.append({"time_ms": at + shift, "dur_ms": 500,
+                              "pitch": n["pitch"], "velocity": 80})
+    warm_soft.sort(key=lambda n: n["time_ms"])
+    soft, ms, err = post("/", {"score": warm_xml, "notes": warm_soft,
+                               "control_changes": [], "tempo_factor": 2.0,
+                               "dynamics": False})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("l'accordo con 40 ms di scarto risponde", False)
+    else:
+        cj = soft["verdicts"].get("chord-jitter") or {}
+        print("  chord-jitter exit %s in %.0f ms" % (cj.get("exit"), ms))
+        check("40 ms fra le mani restano dentro i 50 ms",
+              cj.get("exit") == 0)
+
     # ---- lo stesso gruppo quando l'accordo di sinistra e' ARPEGGIATO: la
     #      regola ha ragione (le note del battere non sono insieme), ma deve
     #      puntare l'accordo, non la nota sola che viene dopo. Prima la
@@ -517,7 +542,7 @@ try:
     for onset, pitches in wmodel.attacks():
         at = wmodel.ms_at(onset) * 2.0
         for p in pitches:
-            shift = {36: 0, 40: 20, 43: 40}.get(p, 0) if onset == 0.0 else 0
+            shift = {36: 0, 40: 20, 43: 70}.get(p, 0) if onset == 0.0 else 0
             warm_roll.append({"time_ms": at + shift, "dur_ms": 500,
                               "pitch": p, "velocity": 80})
     roll, ms, err = post("/", {"score": warm_xml, "notes": warm_roll,

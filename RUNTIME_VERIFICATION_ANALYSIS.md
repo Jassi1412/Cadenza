@@ -13,7 +13,7 @@ Le metriche sono state ottimizzate eliminando le esitazioni (per preservare l'es
 | **1. Accuratezza delle Note (Pitch)** | **Note Errate (Extraneous Notes)** | Pressione di note non presenti nello spartito in quel determinato momento. | Evento `noteon` con `note.number` non atteso. | Rileva errori di lettura dello spartito o tasti premuti per errore. |
 | | **Note Mancanti (Missed Notes)** | Note dello spartito saltate o non registrate dal monitor. | Mancato `noteon` prima dell'avanzamento dello spartito. | Evidenzia note saltate o passaggi non letti. |
 | | **Note "Ghost" (Slip-offs)** | Note a bassissima velocità e durata brevissima adiacenti a note corrette. | Coppia `noteon`/`noteoff` ravvicinata (es. $\Delta t < 80\text{ ms}$) con `rawAttack < 15`. | Rileva problemi di precisione delle dita (il dito "scivola" su un tasto adiacente). |
-| **2. Tempismo e Ritmo (Timing)** | **Precisione dell'Accordo (Chord Jitter)** | Scostamento temporale massimo nella pressione simultanea delle note di un accordo. | Delta `timestamp` tra i diversi `noteon` dell'accordo. | Un accordo ben eseguito ha le note simultanee (jitter < 30 ms). Identifica arpeggiature involontarie. |
+| **2. Tempismo e Ritmo (Timing)** | **Precisione dell'Accordo (Chord Jitter)** | Scostamento temporale massimo nella pressione simultanea delle note di un accordo. | Delta `timestamp` tra i diversi `noteon` dell'accordo. | Un accordo ben eseguito ha le note simultanee (jitter < 50 ms). Identifica arpeggiature involontarie. |
 | | **Rapporto di Durata (IOI - Inter-Onset)** | Rapporto tra l'intervallo di inizio di note consecutive rispetto al valore nominale dello spartito. | Delta `timestamp` tra `noteon` consecutivi. | Valuta se le proporzioni ritmiche vengono rispettate (es. croma eseguita esattamente come metà tempo di una semiminima). |
 | | **Stabilità del Tempo (BPM Drift)** | Oscillazioni o deviazioni sistematiche del tempo metronomico globale (rallentando/accelerando non richiesti). | Analisi dei `timestamp` medi dei battiti nel tempo. | Aiuta a mantenere un tempo costante, evidenziando se si accelera nei passaggi facili o si rallenta in quelli difficili. |
 | **3. Dinamica ed Espressione** | **Aderenza alla Dinamica dello Spartito** | Confronto tra l'intensità della nota suonata e l'indicazione dello spartito (es. *p*, *mp*, *f*, *ff*). | Valore `note.rawAttack` (0-127) o `note.attack` (0-1) nei `noteon`, confrontato con la dinamica teorica estratta da OSMD. | Valuta se l'esecutore rispetta il colore dinamico dello spartito (es. controllando che una nota segnata come *forte* superi una velocity di 80, e una segnata come *piano* sia sotto 50). |
@@ -135,9 +135,9 @@ Main = Ghost;
 
 ---
 
-### Esempio 3: Precisione dell'Accordo (Chord Jitter < 30 ms)
+### Esempio 3: Precisione dell'Accordo (Chord Jitter < 50 ms)
 
-Due note di un accordo (es. Do4 = 60 e Mi4 = 64) devono essere suonate quasi simultaneamente: $|t_1 - t_2| < 30\text{ ms}$, in qualunque ordine.
+Due note di un accordo (es. Do4 = 60 e Mi4 = 64) devono essere suonate quasi simultaneamente: $|t_1 - t_2| < 50\text{ ms}$, in qualunque ordine.
 
 ```rml
 noteOnT(num,t) matches {type:'noteon', note:{number:num}, timestamp:t};
@@ -145,10 +145,10 @@ noteOnT(num,t) matches {type:'noteon', note:{number:num}, timestamp:t};
 ChordJitter = {let t1, t2;
                // shuffle: le due note possono arrivare in ordine qualsiasi
                (noteOnT(60,t1) | noteOnT(64,t2))
-               with abs(t1 - t2) < 30};
+               with abs(t1 - t2) < 50};
 ```
 
-*Spiegazione*: l'operatore shuffle `|` accetta l'interleaving in entrambi gli ordini; la clausola `with` fallisce se lo scostamento supera i 30 ms, segnalando un'arpeggiatura involontaria.
+*Spiegazione*: l'operatore shuffle `|` accetta l'interleaving in entrambi gli ordini; la clausola `with` fallisce se lo scostamento supera i 50 ms, segnalando un'arpeggiatura involontaria.
 
 ---
 

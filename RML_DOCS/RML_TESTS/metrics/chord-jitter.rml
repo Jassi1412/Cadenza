@@ -1,6 +1,6 @@
 // Metric: chord-jitter
 // FR-004: le note che lo spartito chiede di premere NELLO STESSO ISTANTE devono
-// essere suonate entro 30 ms l'una dall'altra.
+// essere suonate entro 50 ms l'una dall'altra.
 //
 // PRIMA ERA CABLATA A MANO, su un accordo di prova:
 //
@@ -49,13 +49,13 @@ chordNote(cid, ts) matches
 // scarterebbe le note da giudicare invece di segnalarle.
 anyNoteOn matches {type:'noteon'};
 
-// seconda nota dello stesso istante, entro 30 ms dalla prima.
+// seconda nota dello stesso istante, entro 50 ms dalla prima.
 // c e t1 sono legati dal chiamante con let.
-mateOf(c, t1) matches chordNote(c, t2) with abs(t2 - t1) < 30;
+mateOf(c, t1) matches chordNote(c, t2) with abs(t2 - t1) < 50;
 
 mateOf matches mateOf(_, _);
 
-// Un accordo: una nota con compagni, il primo compagno obbligatorio entro 30 ms
+// Un accordo: una nota con compagni, il primo compagno obbligatorio entro 50 ms
 // dalla prima, poi tutti gli altri compagni dello stesso istante di partitura.
 // Ogni compagno e' confrontato con la prima nota, non con il precedente: t1 e'
 // riempito una volta sola e non viene piu' toccato.

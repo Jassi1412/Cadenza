@@ -436,8 +436,8 @@ def _chord_anchor(ids, events):
     La macchina RML si ferma sul primo evento che non riesce a leggere DOPO
     aver consumato un gruppo; quando l'accordo e' arrivato sparpagliato, quel
     primo evento e' la nota SUCCESSIVA. Misurato sul Warmup l'11-11-2026:
-    accordo di sinistra arpeggiato 0/20/40 ms, oppure destra e sinistra non
-    simultanee di 40 ms sul battere, e chord-jitter puntava alla SECONDA nota
+    accordo di sinistra arpeggiato 0/20/70 ms, oppure destra e sinistra non
+    simultanee di 70 ms sul battere, e chord-jitter puntava alla SECONDA nota
     di destra (beat 1, `chordMates: []`), sola: l'utente vedeva il jitter su
     una nota che non ha nessun accordo mentre la violazione era sul battere.
 
