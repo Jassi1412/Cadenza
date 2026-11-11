@@ -1,0 +1,21 @@
+name: Keep Render warm
+
+# Pings the backend every 15 minutes so Render Free does not spin down
+# between takes. Runs on GitHub's servers, so it keeps working when your PC
+# is off. Failures show as a red check on the commit, so you notice if the
+# service stops answering.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Cadenza backend
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://cadenza-etji.onrender.com/)
+          echo "Render responded HTTP $code"
+          test "$code" -ge 200 -a "$code" -lt 400
