@@ -132,6 +132,12 @@ const rotto = planMarks({ 'pitch-agreement': { ok: false, exit: 2 }, 'chord-jitt
 const r4 = summaryLines(rotto, 1, [], 100);
 check('monitor rotto dichiarato senza colpevolizzare l\'allievo',
   r4.some((l) => l.startsWith('not judged') && l.includes('pitch-agreement')));
+const sospese = summaryLines(sole, 0, [], 216, ['syncopated-pedal', 'pedal-toggle']);
+check('con una mano le regole sospese sono DETTE: un silenzio si leggerebbe come conforme',
+  sospese.some((l) => l.startsWith('not judged with one hand')
+    && l.includes('pedal-toggle') && l.includes('syncopated-pedal')));
+check('senza sospese la riga non compare',
+  !summaryLines(sole, 0, [], 216).some((l) => l.includes('not judged with one hand')));
 
 // ---------------------------------------------------- stabilita' della chiave
 const dup = planMarks({

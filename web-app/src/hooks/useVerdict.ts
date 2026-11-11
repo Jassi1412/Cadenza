@@ -253,6 +253,12 @@ export interface UseVerdictReturn {
    */
   correct: ScoreLocation[] | null;
   /**
+   * Le regole che il servizio ha dichiarato SOSPESE per questa presa (con una
+   * mano sola il pedale non e' ne' dell'una ne' dell'altra): nome -> motivo,
+   * inglese, arriva gia' scritto dal servizio. Vuoto quando ha giudicato tutto.
+   */
+  suspended: Record<string, string>;
+  /**
    * `originMs` = l'istante del "Go" sull'orologio della pagina: i timestamp
    * MIDI sono relativi alla navigazione, lo spartito conta da 0. Vedi
    * `toPerformance`: senza, ogni nota finisce sull'ultimo attacco.
@@ -275,6 +281,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [error, setError] = useState<string | null>(null);
   const [noteCount, setNoteCount] = useState(0);
   const [correct, setCorrect] = useState<ScoreLocation[] | null>(null);
+  const [suspended, setSuspended] = useState<Record<string, string>>({});
   const busy = useRef(false);
 
   const analyse = useCallback(async (
@@ -311,6 +318,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
       // morti, perche' e' un fatto di copertura e non un verdetto. Assente =
       // servizio vecchio che non la conosce ancora: nulla da colorare, niente errore.
       setCorrect(Array.isArray(payload.correct) ? (payload.correct as ScoreLocation[]) : []);
+      setSuspended((payload.suspended ?? {}) as Record<string, string>);
       setStatus('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -326,7 +334,8 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
     setError(null);
     setNoteCount(0);
     setCorrect(null);
+    setSuspended({});
   }, []);
 
-  return { status, verdicts, error, noteCount, correct, analyse, reset };
+  return { status, verdicts, error, noteCount, correct, suspended, analyse, reset };
 }

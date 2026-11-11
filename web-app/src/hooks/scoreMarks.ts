@@ -253,6 +253,7 @@ export function summaryLines(
   markedCount: number,
   missedRules: string[],
   noteCount: number,
+  suspended: string[] = [],
 ): string[] {
   const unlocatable = [...new Set([...plan.unpinned, ...missedRules])].sort();
   const lines: string[] = [];
@@ -274,6 +275,12 @@ export function summaryLines(
   }
   if (plan.broken.length) {
     lines.push(`not judged, the monitor did not start: ${plan.broken.join(', ')}`);
+  }
+  // Con una mano sola il pedale non e' di nessuna delle due: il servizio lo
+  // dichiara sospeso, e la riga lo dice invece di lasciare un silenzio che si
+  // legge come "conforme" (stessa regola dei monitor che non partono).
+  if (suspended.length) {
+    lines.push(`not judged with one hand: ${[...new Set(suspended)].sort().join(', ')}`);
   }
   return lines;
 }

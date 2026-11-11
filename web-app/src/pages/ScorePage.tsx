@@ -1432,6 +1432,7 @@ const ScorePage: React.FC = () => {
               markedSpots,
               missedRules,
               verdict.noteCount,
+              Object.keys(verdict.suspended),
             )
             : []}
           onClose={() => setCardDismissed(true)}

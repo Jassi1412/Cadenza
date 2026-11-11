@@ -488,6 +488,15 @@ try:
             check("con D acceso la regola della dinamica c'e', e ha giudicato",
                   res is not None and "dynamics-adherence" in res["verdicts"]
                   and res["verdicts"]["dynamics-adherence"]["exit"] in (0, 1))
+            # Il pedale non e' ne' dell'una ne' dell'altra: filtrato cambierebbe
+            # risposta senza che l'esecuzione cambi (misurato: la stessa presa
+            # pulita "fallisce" a sinistra e passa a destra). Si sospende, e la
+            # risposta lo dichiara invece di lasciare un silenzio assolutorio.
+            check("con una mano il pedale non si giudica",
+                  not ({"pedal-toggle", "syncopated-pedal"} & set(sola["verdicts"])))
+            check("e le due regole sospese sono dichiarate nella risposta",
+                  sorted(sola.get("suspended") or {})
+                  == ["pedal-toggle", "syncopated-pedal"])
 
     _, _, err = post("/", {"score": score_xml, "notes": notes, "hand": "destra"})
     print("\n=== POST / : mano scritta male ===")

@@ -124,6 +124,28 @@ SCRATCH = os.environ.get("CADENZA_TMPDIR") or os.path.join(ROOT, "scratch")
 METRICS = ("articulation", "chord-jitter", "dynamics-adherence", "pedal-toggle",
            "pitch-agreement", "pitch-range", "syncopated-pedal")
 
+# Le regole che non appartengono a una mano, e che quindi si sospendono quando
+# la presa ne giudica una sola (richiesta 2026-11-10).
+#
+# Il pedale non e' ne' della destra ne' della sinistra, e filtrato cambia
+# RISPOSTA senza che l'esecuzione sia cambiata: misurato sul brano di Zelda, la
+# stessa presa pulita passa sul brano intero, passa a mano destra, e a mano
+# sinistra risultava violata in 40 punti (5 dei quali su attacchi che la
+# sinistra non ha nemmeno). Non e' un errore dell'allievo: e' il pedale che si
+# aggancia ad attacchi che nell'altro filtro non esistono. Meglio dichiararle
+# sospese che dipingerle addosso a una mano che non le ha suonate — la stessa
+# scelta che la pratica fa con le tre regole che non hanno senso a brano fermo
+# (`SUSPENDED_RULES` in practice.py).
+HAND_SUSPENDED = {
+    "pedal-toggle":
+        "It compares every CC64 with a pedal span. With one hand the span is "
+        "still the whole piece, so the foot would be judged against notes this "
+        "exercise does not contain.",
+    "syncopated-pedal":
+        "It reads the order of pedal and note attacks. Filtered to one staff "
+        "that order changes with the filter, not with the performance.",
+}
+
 # Tetto di richiesta. Uno spartito reale e' 90 KB; 2 MB lascia spazio per
 # spartiti corposi senza dare a un chiamante spazio per far saturare l'istanza
 # da solo, che su Render Free e' 512 MB condivisi con tutto il resto.
@@ -552,6 +574,9 @@ def analyse(body):
             f.write(to_jsonl(events) + "\n")
         metrics = METRICS if dynamics else tuple(
             m for m in METRICS if m != "dynamics-adherence")
+        if hand:
+            # Il pedale non e' di nessuna delle due mani: vedi HAND_SUSPENDED.
+            metrics = tuple(m for m in metrics if m not in HAND_SUSPENDED)
         verdicts = _run_metrics(trace, metrics)
     finally:
         unlink(score)
@@ -722,6 +747,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/practice/step":
                 return self._send(200, practise_step(body))
 
+            hand = _requested_hand(body)
             verdicts, events, model, notes, factor = analyse(body)
             # Su una regola violata viaggiano anche i punti dello spartito: la
             # pagina ci colora di rosso le note e il mouse sopra racconta quali
@@ -761,7 +787,7 @@ class Handler(BaseHTTPRequestHandler):
                 red.update(_loc_key(l) for l in missed)
             correct = [l for l in correct if _loc_key(l) not in red]
 
-            self._send(200, {
+            answer = {
                 "events": len(events),
                 "verdicts": payload,
                 # Il verde della presa: attacchi scritti che hanno suonato il
@@ -772,7 +798,12 @@ class Handler(BaseHTTPRequestHandler):
                 # quel punto, il punto era gia' rosso e non puo' essere verde.
                 "correct": correct,
                 "stderr": {k: v[2] for k, v in verdicts.items() if v[2].strip()},
-            })
+            }
+            if hand:
+                # Un verdetto che tace si legge come "conforme": con una mano
+                # sola il pedale non e' stato giudicato, e la risposta lo dice.
+                answer["suspended"] = HAND_SUSPENDED
+            self._send(200, answer)
         except Exception as e:
             traceback.print_exc()
             self._send(400, {"error": "%s: %s" % (type(e).__name__, e)})
