@@ -497,6 +497,10 @@ try:
             check("e le due regole sospese sono dichiarate nella risposta",
                   sorted(sola.get("suspended") or {})
                   == ["pedal-toggle", "syncopated-pedal"])
+            # La pagina colora solo il rigo giudicato: deve sapere quale mano
+            # senza indovinarlo dalla scelta a schermo (che puo' essere cambiata).
+            check("la risposta dichiara la mano giudicata",
+                  sola.get("hand") == "left")
 
     _, _, err = post("/", {"score": score_xml, "notes": notes, "hand": "destra"})
     print("\n=== POST / : mano scritta male ===")

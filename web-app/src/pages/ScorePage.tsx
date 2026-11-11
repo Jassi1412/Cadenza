@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useMidi } from '../hooks/useMidi';
-import { useVerdict, fetchHands, type HandSummary, type VerdictBodyOptions } from '../hooks/useVerdict';
+import { useVerdict, fetchHands, type HandFilter, type HandSummary, type VerdictBodyOptions } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
-import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, summaryLines, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
+import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, staffForHand, summaryLines, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
 import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
@@ -294,7 +294,12 @@ function paintNotehead(head: SVGGElement, state: MarkState, color: string): void
  * dentro. Se nulla cade sulla riga si dichiara il punto "non raggiunto": meglio
  * una riga sotto che dire "è colpa tua" alla nota del vicino.
  */
-function paintScoreMarks(osmd: any, columns: MarkColumn[], green?: GreenSpot[]): {
+function paintScoreMarks(
+  osmd: any,
+  columns: MarkColumn[],
+  green?: GreenSpot[],
+  hand?: HandFilter,
+): {
   state: MarkState;
   painted: number;
   firstEl: SVGGElement | null;
@@ -328,6 +333,16 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[], green?: GreenSpot[]):
     return { state, painted, firstEl, missed };
   }
 
+  // Tutte le misure del disegno, raggruppate per numero: quella corrente si
+  // legge dal cursore a ogni fermata, e i suoi gruppi (uno per rigo) danno la
+  // banda verticale che l'immagine del cursore non copre.
+  const measures = new Map<string, SVGGElement[]>();
+  for (const m of document.querySelectorAll<SVGGElement>('#sheet-container g.vf-measure')) {
+    const list = measures.get(m.id);
+    if (list) list.push(m);
+    else measures.set(m.id, [m]);
+  }
+
   let pos = -1;
   for (const { col, attack } of walk) {
     pos = moveCursorToStep(osmd, attack, pos);
@@ -345,22 +360,61 @@ function paintScoreMarks(osmd: any, columns: MarkColumn[], green?: GreenSpot[]):
       continue;
     }
     const ir = img.getBoundingClientRect();
+    const cursorX = ir.left + ir.width / 2;
+
+    // La banda verticale viene dalla MISURA, non dall'immagine del cursore.
+    // L'immagine e' alta meno del sistema e sul Warmup finiva a y=527 mentre
+    // l'accordo di sinistra arriva a y=588: le teste sotto la banda non
+    // venivano ne' colorate ne' dichiarate — le "note nere senza nessun
+    // feedback" segnalate l'11-11-2026. I gruppi vf-measure della misura
+    // corrente coprono tutte le teste che le appartengono, su tutti i righi.
+    const measureNo = osmd?.cursors?.[0]?.Iterator?.CurrentMeasure?.MeasureNumber;
     let bandTop = ir.top;
     let bandBottom = ir.bottom;
+    const groups = measures.get(String(measureNo));
+    if (groups?.length) {
+      let top = Infinity;
+      let bottom = -Infinity;
+      for (const g of groups) {
+        const r = g.getBoundingClientRect();
+        if (r.width === 0) continue;
+        // un'altra occorrenza della stessa misura vive in un altro sistema:
+        // vale solo quella che sta sotto il cursore
+        if (r.bottom < ir.top - 4 || r.top > ir.bottom + 4) continue;
+        if (r.right < cursorX - 6 || r.left > cursorX + 6) continue;
+        top = Math.min(top, r.top);
+        bottom = Math.max(bottom, r.bottom);
+      }
+      if (Number.isFinite(top) && Number.isFinite(bottom)) {
+        bandTop = top;
+        bandBottom = bottom;
+      }
+    }
     if (bandBottom - bandTop < 10) {
       // una linea troppo corta per distinguere i righi: allarga con giudizio,
       // restando dentro il sistema che il cursore sta indicando
       bandTop -= 80;
       bandBottom += 80;
     }
-    const cursorX = ir.left + ir.width / 2;
 
+    // Con una mano sola il verdetto e' DELLA MANO, non della colonna: sul
+    // Warmup il primo attacco e' insieme Do4 (destra) e accordo di sinistra,
+    // e la colonna intera prendeva anche il verde della sinistra.
+    const wantedStaff = staffForHand(hand);
     const heads: NoteheadHit[] = [];
     for (const h of document.querySelectorAll<SVGGElement>('#sheet-container g.vf-notehead')) {
       const r = h.getBoundingClientRect();
       if (r.width === 0) continue;
       const cy = (r.top + r.bottom) / 2;
       if (cy < bandTop - 4 || cy > bandBottom + 4) continue;
+      if (wantedStaff !== null) {
+        // OSMD numera i gruppi staffline come il MusicXML: Piano0-1 = sopra
+        // (destra), Piano0-2 = sotto (sinistra), la stessa convenzione di
+        // ScoreModel.for_hand. Una testa senza numero si salta: colorarla
+        // sarebbe attribuirle una mano che nessuno ha dichiarato.
+        const n = /-(\d+)$/.exec(h.closest('g.staffline')?.id ?? '');
+        if (!n || Number(n[1]) !== wantedStaff) continue;
+      }
       heads.push({ el: h, cx: r.left + r.width / 2 });
     }
     if (!heads.length) {
@@ -806,7 +860,7 @@ const ScorePage: React.FC = () => {
     setTipHover(null); // il verdetto che si rinnova non deve lasciare una card su una nota ormai scolorita
     if (verdict.status !== 'done' || !verdict.verdicts || isPractice) return;
     const plan = planMarks(verdict.verdicts, verdict.correct);
-    const out = paintScoreMarks(osmdRef.current, plan.columns, plan.green);
+    const out = paintScoreMarks(osmdRef.current, plan.columns, plan.green, verdict.hand);
     marksRef.current = out.state;
     setMarkedSpots(out.painted);
     setMissedRules(out.missed);
@@ -817,7 +871,7 @@ const ScorePage: React.FC = () => {
       // punteggio arriva da sola davanti agli occhi, dove lo sguardo sta già.
       out.firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [verdict.status, verdict.verdicts, verdict.correct, isPractice]);
+  }, [verdict.status, verdict.verdicts, verdict.correct, verdict.hand, isPractice]);
 
   /** Il voto 0-100 della carta centrata — lo decide `performanceScore`, qui si legge e basta. */
   const scoreOutcome = useMemo(

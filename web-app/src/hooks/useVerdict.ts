@@ -259,6 +259,13 @@ export interface UseVerdictReturn {
    */
   suspended: Record<string, string>;
   /**
+   * La mano che il servizio ha davvero giudicato in questa presa ('left' |
+   * 'right' | null = brano intero). La pagina la usa per colorare solo il rigo
+   * giudicato: senza, quando le due mani suonano insieme il verdetto di una
+   * finisce addosso all'altra (vedi `staffForHand`).
+   */
+  hand: HandFilter;
+  /**
    * `originMs` = l'istante del "Go" sull'orologio della pagina: i timestamp
    * MIDI sono relativi alla navigazione, lo spartito conta da 0. Vedi
    * `toPerformance`: senza, ogni nota finisce sull'ultimo attacco.
@@ -282,6 +289,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
   const [noteCount, setNoteCount] = useState(0);
   const [correct, setCorrect] = useState<ScoreLocation[] | null>(null);
   const [suspended, setSuspended] = useState<Record<string, string>>({});
+  const [hand, setHand] = useState<HandFilter>(null);
   const busy = useRef(false);
 
   const analyse = useCallback(async (
@@ -319,6 +327,7 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
       // servizio vecchio che non la conosce ancora: nulla da colorare, niente errore.
       setCorrect(Array.isArray(payload.correct) ? (payload.correct as ScoreLocation[]) : []);
       setSuspended((payload.suspended ?? {}) as Record<string, string>);
+      setHand((payload.hand as HandFilter) ?? null);
       setStatus('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -335,7 +344,8 @@ export function useVerdict(events: readonly MidiEvent[]): UseVerdictReturn {
     setNoteCount(0);
     setCorrect(null);
     setSuspended({});
+    setHand(null);
   }, []);
 
-  return { status, verdicts, error, noteCount, correct, suspended, analyse, reset };
+  return { status, verdicts, error, noteCount, correct, suspended, hand, analyse, reset };
 }

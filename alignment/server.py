@@ -803,6 +803,11 @@ class Handler(BaseHTTPRequestHandler):
                 # Un verdetto che tace si legge come "conforme": con una mano
                 # sola il pedale non e' stato giudicato, e la risposta lo dice.
                 answer["suspended"] = HAND_SUSPENDED
+                # La mano giudicata viaggia con la risposta: la pagina deve
+                # colorare solo il rigo di quella mano, e senza questo campo
+                # dovrebbe indovinarlo dalla scelta fatta a schermo — che nel
+                # frattempo puo' essere cambiata.
+                answer["hand"] = hand
             self._send(200, answer)
         except Exception as e:
             traceback.print_exc()

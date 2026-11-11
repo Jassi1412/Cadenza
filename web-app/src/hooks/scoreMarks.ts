@@ -188,6 +188,23 @@ export function planMarks(verdicts: VerdictsLike, correct?: ScoreLocation[] | nu
 
 import { noteName } from './practiceSteps';
 
+/**
+ * Il rigo MusicXML che porta una mano, nella convenzione del servizio:
+ * 1 = destra (sopra), 2 = sinistra (sotto). `null`, `'both'` o assente =
+ * nessun filtro, si colora tutto.
+ *
+ * Serve alla pagina per NON colorare l'altra mano quando la presa ne giudica
+ * una sola. Sul Warmup il primo attacco e' insieme il Do4 della destra e
+ * l'accordo di sinistra: colorando la colonna intera, il verdetto della
+ * sinistra finiva addosso alla nota di destra — verde compreso
+ * ("il primo accordo la nota piu' alta e' verde", 2026-11-11).
+ */
+export function staffForHand(hand: string | null | undefined): number | null {
+  if (hand === 'right') return 1;
+  if (hand === 'left') return 2;
+  return null;
+}
+
 /** Una riga della card d'hover: il nome della regola e, dove c'è, la coppia di numeri. */
 export interface MarkLine {
   rule: string;

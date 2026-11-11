@@ -46,7 +46,7 @@ const emitted = path.join(OUT, 'scoreMarks.js');
 if (!existsSync(emitted)) throw new Error('tsc non ha prodotto scoreMarks.js');
 renameSync(emitted, path.join(OUT, 'scoreMarks.cjs'));
 
-const { planMarks, markLines, markTipFor, performanceScore, summaryLines, endSignal, consumedFullTrack } = require(path.join(OUT, 'scoreMarks.cjs'));
+const { planMarks, markLines, markTipFor, performanceScore, summaryLines, endSignal, consumedFullTrack, staffForHand } = require(path.join(OUT, 'scoreMarks.cjs'));
 
 const esiti = [];
 function check(label, cond) {
@@ -138,6 +138,9 @@ check('con una mano le regole sospese sono DETTE: un silenzio si leggerebbe come
     && l.includes('pedal-toggle') && l.includes('syncopated-pedal')));
 check('senza sospese la riga non compare',
   !summaryLines(sole, 0, [], 216).some((l) => l.includes('not judged with one hand')));
+check('la mano giudicata sceglie il rigo MusicXML: destra 1, sinistra 2, nessun filtro null',
+  staffForHand('right') === 1 && staffForHand('left') === 2
+  && staffForHand('both') === null && staffForHand(null) === null);
 
 // ---------------------------------------------------- stabilita' della chiave
 const dup = planMarks({
