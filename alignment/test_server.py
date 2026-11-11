@@ -473,6 +473,39 @@ try:
         check("una nota anticipata non eredita l'accordo della mano tenuta",
               cj.get("exit") == 0)
 
+    # ---- la destra sola con il brano intero selezionato (2026-11-11): i
+    #      battere del Warmup hanno anche l'accordo di sinistra. Se quelle note
+    #      non vengono premute, chord-jitter non deve accusare la nota di
+    #      destra: l'accordo incompleto e' un buco di copertura, non un jitter.
+    print("\n=== POST / : destra sola, accordo di sinistra mai suonato ===")
+    warm_right = []
+    for cid, (onset, _pitches) in enumerate(wmodel.attacks()):
+        at = wmodel.ms_at(onset) * 2.0
+        for n in wmodel.notes:
+            if n["chordId"] != cid or n.get("staff") != 1:
+                continue
+            warm_right.append({"time_ms": at, "dur_ms": 500,
+                               "pitch": n["pitch"], "velocity": 80})
+    warm_right.sort(key=lambda n: n["time_ms"])
+    one, ms, err = post("/", {"score": warm_xml, "notes": warm_right,
+                              "control_changes": [], "tempo_factor": 2.0,
+                              "dynamics": False})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la destra sola risponde", False)
+    else:
+        cj = one["verdicts"].get("chord-jitter") or {}
+        missing = (one["verdicts"].get("never played") or {}).get("locations") or []
+        print("  chord-jitter exit %s, locs %s" %
+              (cj.get("exit"), cj.get("locations")))
+        print("  never played %s in %.0f ms" %
+              ([(l.get("measure"), l.get("beat"), l.get("attack"))
+                for l in missing], ms))
+        check("la destra sola non fa scattare il jitter dell'accordo incompleto",
+              cj.get("exit") == 0 and not (cj.get("locations") or []))
+        check("l'accordo di sinistra mancante e' dichiarato never played",
+              any(l.get("attack") == 0 for l in missing))
+
     # ---- lo stesso gruppo quando l'accordo di sinistra e' ARPEGGIATO: la
     #      regola ha ragione (le note del battere non sono insieme), ma deve
     #      puntare l'accordo, non la nota sola che viene dopo. Prima la

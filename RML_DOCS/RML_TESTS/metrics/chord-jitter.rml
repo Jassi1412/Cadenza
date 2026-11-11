@@ -12,8 +12,11 @@
 // >> e la metrica diceva "ok" senza aver guardato niente.
 //
 // I DATI VENGONO DALLO SPARTITO, tre campi prodotti dal JOIN:
-//   expected.chordMates  gli altri pitch che vanno premuti nello stesso istante.
-//                       Lista VUOTA se questa nota non ha compagni.
+//   expected.chordMates  gli altri pitch che vanno premuti nello stesso istante,
+//                       FILTRATI a quelli che l'esecuzione ha davvero premuto
+//                       (join.py). Una compagna scritta e mai suonata non e' un
+//                       jitter: e' un buco di copertura, e la nota resta sola
+//                       per questa regola. Lista VUOTA se non ha compagni.
 //   expected.chordId     l'istante di partitura a cui appartiene
 //   timestamp            quando la nota e' davvero suonata
 //

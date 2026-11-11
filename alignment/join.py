@@ -769,6 +769,28 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
         i = bisect.bisect_right(attacchi, t)
         return attacchi[i] if i < len(attacchi) else None
 
+    # Quali pitch di ogni attacco esistono DAVVERO nell'esecuzione. Serve al
+    # chord-jitter: una nota con compagni scritti ma mai premuti non e' una
+    # nota arrivata in ritardo, e' un buco di copertura. Senza questo, suonando
+    # solo la destra con il brano intero selezionato i battere del Warmup
+    # finivano rossi di chord-jitter per l'accordo di sinistra assente
+    # (segnalato 2026-11-11; `hand=right` non lo faceva perche' il modello
+    # filtrato non ha proprio quei compagni).
+    def chord_of_note(p):
+        score_t = p["time_ms"] / tempo_factor
+        beat = model.snap_beat(model.beat_at(score_t))
+        near_pitch, _ = model.nearest(model.score_pitches_at(beat), p["pitch"])
+        cid = model.chord_of_pitch(near_pitch, beat)
+        if cid is None:
+            cid = model.chord_at(beat)
+        return cid, near_pitch
+
+    played_pitches = {}
+    for p in performed_notes:
+        cid, near_pitch = chord_of_note(p)
+        if cid is not None and near_pitch is not None:
+            played_pitches.setdefault(cid, set()).add(near_pitch)
+
     events = []
     for p in performed_notes:
         t = p["time_ms"]
@@ -804,6 +826,14 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
         # e' la nota giusta che va cercata fra le altre da premere insieme
         chord_mates = (model.mates_of(chord_id, near_pitch)
                        if chord_id is not None and near_pitch is not None else [])
+        # Il jitter e' una relazione fra note che il pianista ha premuto: i
+        # compagni scritti e mai suonati vanno tolti, altrimenti una nota sola
+        # non puo' mai passare come `soloNote` e viene accusata di non essere
+        # arrivata insieme a un accordo che non ha suonato nessuno. I buchi
+        # restano di competenza di coverage("never played").
+        if chord_mates:
+            played = played_pitches.get(chord_id, set())
+            chord_mates = [m for m in chord_mates if m in played]
 
         # il prossimo attacco suonato: serve al gapMs sotto
         prossimo = prossimo_attacco(t)
@@ -828,7 +858,9 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
             "pitchDist": pitch_dist,
             "pitches": expected_pitches,
             # gruppo di accordo preso dallo spartito, non dall'esecuzione:
-            # l'istante in partitura e CHI sono le altre note da premervi con lui
+            # l'istante in partitura e CHI sono le altre note da premervi con lui.
+            # `chordMates` contiene solo i compagni che l'esecuzione ha davvero
+            # premuto: quelli assenti non sono jitter, sono copertura.
             "chordId": chord_id,
             "chordMates": chord_mates,
             # il cartiglio che lo spartito mette qui: "staccato", "tenuto",
