@@ -660,25 +660,59 @@ class ScoreModel:
                     best, best_d = self._onsets[k], d
         return best if best_d is not None and best_d <= eps else beat
 
-    def chord_mates(self, beat, pitch):
-        """Gli ALTRI pitch che lo spartito chiede di premere nello stesso istante.
-
-        Vuoto se il gruppo non contiene che questa nota: e' il caso in cui la
-        nota non ha compagni e puo' arrivare quando le pare.
+    def mates_of(self, chord_id, pitch):
+        """Gli ALTRI pitch di un attacco, tolto UN pitch uguale a quello suonato.
 
         Non si conta quante note ha il gruppo, si nomina chi ci sta dentro.
         E' la differenza che rende la regola generalizzabile: un accordo a 3
         note e uno a 2 si comportano allo stesso modo, senza casi speciali.
         """
-        cid = self.chord_at(beat)
-        if cid is None:
-            return []
-        mates = list(self._group_pitches.get(cid, ()))
+        mates = list(self._group_pitches.get(chord_id, ()))
         # si toglie UNA sola occorrenza: se due voci suonano la stessa nota,
         # l'altra resta compagna e va comunque premuta
         if pitch in mates:
             mates.remove(pitch)
         return sorted(mates)
+
+    def chord_mates(self, beat, pitch):
+        """Gli ALTRI pitch che lo spartito chiede di premere nello stesso istante.
+
+        Vuoto se il gruppo non contiene che questa nota: e' il caso in cui la
+        nota non ha compagni e puo' arrivare quando le pare.
+        """
+        cid = self.chord_at(beat)
+        if cid is None:
+            return []
+        return self.mates_of(cid, pitch)
+
+    def chord_of_pitch(self, pitch, beat):
+        """L'attacco scritto che contiene questo pitch, il piu' vicino a beat.
+
+        `chord_at` e' una funzione a gradino: prende l'ultimo attacco passato,
+        e va bene finche' la battuta e' gia' stata agganciata a un attacco. Ma
+        una nota suonata in ANTICIPO di poche decine di ms cade fra due
+        attacchi, non viene agganciata da `snap_beat`, e prendeva l'accordo
+        precedente: sul Warmup la seconda nota della destra, sola, veniva
+        accusata di chord-jitter perche' le venivano attribuiti i compagni
+        dell'accordo di sinistra ancora TENUTO, che nessuno aveva riattaccato
+        (segnalato il 2026-11-11; riprodotto: 60 ms di anticipo, 
+        chord-jitter 1 su una nota singola; a tempo perfetto 0).
+
+        Il pitch e' la chiave esatta: `join` lo sceglie gia' fra le note attese
+        (`nearest`), e ogni nota scritta appartiene a un solo attacco. Cosi'
+        l'accordo e' quello della nota che si sta suonando, non quello che
+        l'orologio ha appena superato.
+        """
+        if pitch is None:
+            return None
+        best, best_d = None, None
+        for n in self.notes:
+            if n["pitch"] != pitch:
+                continue
+            d = abs(n["onset"] - beat)
+            if best_d is None or d < best_d:
+                best, best_d = n["chordId"], d
+        return best
 
     def nearest(self, pitches, pitch):
         """(pitch atteso piu' vicino, distanza in semitoni).
@@ -754,11 +788,22 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
         e = model.expected_at(beat)
         expected_pitches = model.score_pitches_at(beat)
         near_pitch, pitch_dist = model.nearest(expected_pitches, p["pitch"])
-        chord_id = model.chord_at(beat)
+        # L'accordo e' quello della NOTA SCRITTA riconosciuta da questa
+        # pressione, non l'ultimo attacco passato: una nota in anticipo di poche
+        # decine di ms cade fra due attacchi e `chord_at` (a gradino) le faceva
+        # ereditare i compagni dell'attacco precedente — sul Warmup la seconda
+        # nota della destra, sola, veniva accusata di chord-jitter perche'
+        # cadeva dentro l'accordo di sinistra ancora tenuto (2026-11-11).
+        # `chord_at` resta il ripiego per una pressione che non riconosce
+        # nessuna nota scritta (nota estranea in un silenzio).
+        chord_id = model.chord_of_pitch(near_pitch, beat)
+        if chord_id is None:
+            chord_id = model.chord_at(beat)
         # i compagni d'accordo si cercano con il pitch che lo spartito si
         # ASPETTA, non con quello suonato: se il pianista ha sbagliato intonazione
         # e' la nota giusta che va cercata fra le altre da premere insieme
-        chord_mates = model.chord_mates(beat, near_pitch)
+        chord_mates = (model.mates_of(chord_id, near_pitch)
+                       if chord_id is not None and near_pitch is not None else [])
 
         # il prossimo attacco suonato: serve al gapMs sotto
         prossimo = prossimo_attacco(t)

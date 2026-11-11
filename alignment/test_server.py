@@ -17,6 +17,8 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
+
+from join import ScoreModel  # noqa: E402
 TMPDIR = os.path.join(ROOT, "_probe_traces", "tmp")
 os.makedirs(TMPDIR, exist_ok=True)
 
@@ -439,6 +441,38 @@ try:
     # verdetto. La prova qua sotto e' la stessa esecuzione "pulita" di prima,
     # che suona TUTTE E DUE le mani: se il filtro non togliesse le note
     # dell'altra mano, pitch-agreement le accuserebbe subito.
+    # ---- la verita' dell'utente (2026-11-11): a meta' velocita' ha suonato
+    #      entrambe le mani, e la seconda nota di destra di ogni misura e'
+    #      arrivata in anticipo di poche decine di ms. Il join la agganciava
+    #      all'attacco PRECEDENTE — l'accordo di sinistra ancora TENUTO — e
+    #      chord-jitter la accusava di non essere arrivata insieme a un accordo
+    #      che nessuno aveva riattaccato. Ora l'accordo e' quello della nota
+    #      scritta riconosciuta dal pitch, non l'ultimo attacco passato.
+    print("\n=== POST / : la nota in anticipo non eredita l'accordo tenuto ===")
+    warmup = os.path.join(REPO, "Warmup C Major (scale and chords).musicxml")
+    with open(warmup, encoding="utf-8") as f:
+        warm_xml = f.read()
+    wmodel = ScoreModel.from_musicxml(warmup)
+    warm_notes, early_done = [], False
+    for onset, pitches in wmodel.attacks():
+        at = wmodel.ms_at(onset) * 2.0
+        for p in pitches:
+            early = 60.0 if (p == 62 and not early_done) else 0.0
+            early_done = early_done or early > 0
+            warm_notes.append({"time_ms": at - early, "dur_ms": 500,
+                               "pitch": p, "velocity": 80})
+    warm, ms, err = post("/", {"score": warm_xml, "notes": warm_notes,
+                               "control_changes": [], "tempo_factor": 2.0,
+                               "dynamics": False})
+    if err:
+        print("  ERRORE: %s" % err)
+        check("la presa del Warmup risponde", False)
+    else:
+        cj = warm["verdicts"].get("chord-jitter") or {}
+        print("  chord-jitter exit %s in %.0f ms" % (cj.get("exit"), ms))
+        check("una nota anticipata non eredita l'accordo della mano tenuta",
+              cj.get("exit") == 0)
+
     print("\n=== POST /hands : cosa si puo' separare ===")
     hm, ms, err = post("/hands", {"score": score_xml})
     if err:
