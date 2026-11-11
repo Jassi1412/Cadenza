@@ -5,7 +5,7 @@ import { useMidi } from '../hooks/useMidi';
 import { useVerdict, fetchHands, type HandFilter, type HandSummary, type VerdictBodyOptions } from '../hooks/useVerdict';
 import { usePractice } from '../hooks/usePractice';
 import { handSelection, pressedPitches, staffGray, stepProblem, type HandsSwitch } from '../hooks/practiceSteps';
-import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, staffForHand, summaryLines, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
+import { consumedFullTrack, endSignal, markTipFor, performanceScore, planMarks, staffForHand, type GreenSpot, type MarkTip } from '../hooks/scoreMarks';
 import type { MarkColumn } from '../hooks/scoreMarks';
 import PlaybackBar from '../components/PlaybackBar';
 import PracticeBar from '../components/PracticeBar';
@@ -840,8 +840,6 @@ const ScorePage: React.FC = () => {
   // che handlePlayAlong fa al riavvio, e un verdetto che torna a null — caso
   // solo teorico ora — ripulisce comunque la tela dall'effetto stesso.
   const marksRef = useRef<MarkState | null>(null);
-  const [markedSpots, setMarkedSpots] = useState(0);
-  const [missedRules, setMissedRules] = useState<string[]>([]);
   // "Close" nasconde la carta centrata e basta: rossi, verdi e punte hover
   // restano dove sono. Questa bandierina si alza alla crocetta e si abbassa
   // solo quando una nuova prova parte — nessun altro la tocca.
@@ -855,15 +853,11 @@ const ScorePage: React.FC = () => {
   useEffect(() => {
     clearScoreMarks(marksRef.current);
     marksRef.current = null;
-    setMarkedSpots(0);
-    setMissedRules([]);
     setTipHover(null); // il verdetto che si rinnova non deve lasciare una card su una nota ormai scolorita
     if (verdict.status !== 'done' || !verdict.verdicts || isPractice) return;
     const plan = planMarks(verdict.verdicts, verdict.correct);
     const out = paintScoreMarks(osmdRef.current, plan.columns, plan.green, verdict.hand);
     marksRef.current = out.state;
-    setMarkedSpots(out.painted);
-    setMissedRules(out.missed);
     if (out.firstEl) {
       // il punto in cui andare a vedere per primo: un verdetto che dice dove è
       // successo e ti lascia in cima alla pagina ti fa comunque cercare l'errore.
@@ -968,6 +962,18 @@ const ScorePage: React.FC = () => {
     }
     player.pause();
     player.rewind();
+    // La fine della prova precedente ha nascosto il cursore (`paintScoreMarks`
+    // lo spegne quando ha finito di segnare), e il player con `followCursor`
+    // non lo riaccende da solo: senza questo reset "Play again" fa ripartire
+    // il brano con la linea invisibile (segnalato 2026-11-11).
+    cursorStepRef.current = -1;
+    try {
+      const cursor = osmdRef.current?.cursors?.[0];
+      cursor?.reset();
+      cursor?.show();
+    } catch {
+      // OSMD non pronto: il player lo riaccende al primo movimento
+    }
     midi.clearRecording();
     takeStartRef.current = null;
     // Il referto della prova precedente resta sulla pagina finché l'utente non
@@ -1480,15 +1486,6 @@ const ScorePage: React.FC = () => {
           status={verdict.status}
           error={verdict.error}
           outcome={scoreOutcome}
-          lines={verdict.status === 'done' && verdict.verdicts
-            ? summaryLines(
-              planMarks(verdict.verdicts),
-              markedSpots,
-              missedRules,
-              verdict.noteCount,
-              Object.keys(verdict.suspended),
-            )
-            : []}
           onClose={() => setCardDismissed(true)}
           onPlayAgain={() => void handlePlayAlong()}
         />

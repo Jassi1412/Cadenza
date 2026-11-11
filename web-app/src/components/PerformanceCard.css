@@ -28,14 +28,6 @@
   text-align: center;
 }
 
-.pc-caption {
-  margin: 0 0 0.2rem;
-  font-size: 0.7rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #9a9284;
-}
-
 /* Il numero protagonista: sale da 0 nel script, e la tinta è il linguaggio
    colori dell'app (verde = ok, oro = da lavorare, rosso = errore), non una
    scala inventata per l'occasione. */
@@ -48,12 +40,6 @@
   color: var(--text-primary);
 }
 
-.pc-of {
-  font-size: 0.32em;
-  color: #9a9284;
-  margin-left: 0.15em;
-}
-
 .pc-good .pc-score { color: #2f6b47; }
 .pc-fair .pc-score { color: #8a6d3b; }
 .pc-poor .pc-score { color: #8b2f2f; }
@@ -63,13 +49,6 @@
   font-family: var(--font-heading);
   font-size: 1.3rem;
   color: #6b5b95; /* il viola di "non è colpa tua": qui non ha giudicato nessuno */
-}
-
-.pc-line {
-  margin: 0.7rem 0 0;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--text-secondary);
 }
 
 .pc-status {

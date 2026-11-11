@@ -16,9 +16,10 @@ import type { ScoreOutcome } from '../hooks/scoreMarks';
  *
  * Il numero NON è deciso qui: viene da `performanceScore` nel modulo puro
  * (`hooks/scoreMarks.ts`, provato da alignment/run_scoremarks_tests.mjs). Questa
- * carta anima e mostra, e nient'altro — le righe di dettaglio glielo passano
- * già scritte in inglese, come in tutto il resto dell'app (User Preferences in
- * ../../AGENTS.md).
+ * carta anima e mostra, e nient'altro. Dal 2026-11-11 mostra SOLO il numero:
+ * le righe di dettaglio sono state tolte su richiesta dell'utente ("rimuovi le
+ * scritte lì presenti e lascia solo il numero"). `summaryLines` resta nel
+ * modulo puro, ma la pagina non le disegna più.
  */
 
 export interface PerformanceCardProps {
@@ -28,8 +29,6 @@ export interface PerformanceCardProps {
   error?: string | null;
   /** il verdetto della metrica pura; null finché non è arrivato o se nulla era giudicabile */
   outcome: ScoreOutcome | null;
-  /** le righe di dettaglio già pronte (`summaryLines`): macchie rosse, caveat */
-  lines: string[];
   onClose: () => void;
   onPlayAgain: () => void;
 }
@@ -72,7 +71,7 @@ function band(score: number | null): 'good' | 'fair' | 'poor' | 'none' {
 }
 
 const PerformanceCard: React.FC<PerformanceCardProps> = ({
-  status, error, outcome, lines, onClose, onPlayAgain,
+  status, error, outcome, onClose, onPlayAgain,
 }) => {
   const shown = useCountUp(status === 'done' && outcome ? outcome.score : null);
   const tone = band(status === 'done' && outcome ? outcome.score : null);
@@ -96,20 +95,13 @@ const PerformanceCard: React.FC<PerformanceCardProps> = ({
 
         {status === 'done' && (
           <>
-            <p className="pc-caption">your performance</p>
             {outcome && outcome.score !== null ? (
-              <p className="pc-score" aria-live="polite">
-                {shown}
-                <span className="pc-of">/100</span>
-              </p>
+              <p className="pc-score" aria-live="polite">{shown}</p>
             ) : (
               // exit 2 su ogni regola: nessun monitor è partito. Dire 100 sarebbe
               // "tutto perfetto", dire 0 "hai suonato male": nessuna delle due.
               <p className="pc-none" aria-live="polite">Nothing could be judged</p>
             )}
-            {lines.map((line) => (
-              <p key={line} className="pc-line">{line}</p>
-            ))}
             <div className="pc-actions">
               <button className="btn btn-outline" onClick={onClose}>Close</button>
               <button className="btn btn-primary" onClick={onPlayAgain}>Play again</button>

@@ -258,12 +258,14 @@ export function markTipFor(column: MarkColumn): MarkTip {
 }
 
 /**
- * Le righe che restano al posto dell'elenco dei verdetti. Sono due o tre frasi
- * in tutto, e ognuna copre un caso che LO SPARTITO da solo non puo' dire: i
- * punti rossi dicono cosa e' andato storto li', ma un monitor rotto o una
- * violazione senza una nota (il pedale giudicato sulla intera esecuzione) li
- * leggerebbe come un silenzio di assoluzione. Inglese per contratto (User
- * Preferences nel DOX root).
+ * La lettura completa del piano, in due o tre frasi: i punti rossi dicono cosa
+ * e' andato storto li', ma un monitor rotto o una violazione senza una nota (il
+ * pedale giudicato sulla intera esecuzione) li leggerebbe come un silenzio di
+ * assoluzione. Inglese per contratto (User Preferences nel DOX root).
+ *
+ * Dal 2026-11-11 la card mostra SOLO il numero e la pagina non disegna piu'
+ * queste righe (richiesta dell'utente); la funzione resta pura e provata perche'
+ * e' la lettura completa del piano, non perche' qualcuno la stampi.
  */
 export function summaryLines(
   plan: MarkPlan,
