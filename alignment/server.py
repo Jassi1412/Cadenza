@@ -36,6 +36,7 @@ Uso
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -583,6 +584,48 @@ def _drop_other_hand(model, notes, factor, hand):
     return out
 
 
+# Dove conservare le take, se qualcuno registra per davvero. Vuoto = il servizio
+# si comporta come in produzione e butta spartito, traccia e verdetti appena
+# finita la risposta: le registrazioni della tesi sono take vere, e senza questa
+# variabile non resterebbe niente da rileggere.
+RECORDINGS = os.environ.get("CADENZA_RECORDINGS")
+
+
+def _next_take_name(dirpath):
+    """Il primo nome libero take-NN nella cartella."""
+    n = 1
+    while os.path.exists(os.path.join(dirpath, "take-%02d.jsonl" % n)):
+        n += 1
+    return "take-%02d" % n
+
+
+def keep_recording(body, score, trace, verdicts, factor):
+    """Copia spartito, traccia e verdetti di questa take in RECORDINGS.
+
+    Il nome viene da CADENZA_TAKE se e' impostata, altrimenti da un contatore
+    progressivo. Non solleva: una take non salvata non deve far fallire un
+    verdetto gia' calcolato.
+    """
+    try:
+        os.makedirs(RECORDINGS, exist_ok=True)
+        stamp = os.environ.get("CADENZA_TAKE") or _next_take_name(RECORDINGS)
+        shutil.copyfile(score, os.path.join(RECORDINGS, stamp + ".musicxml"))
+        shutil.copyfile(trace, os.path.join(RECORDINGS, stamp + ".jsonl"))
+        with open(os.path.join(RECORDINGS, stamp + ".verdicts.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({
+                "verdicts": {k: {"ok": v[0], "exit": v[1]}
+                             for k, v in verdicts.items()},
+                "tempo_factor": factor,
+                "hand": body.get("hand"),
+                "dynamics": body.get("dynamics") is not False,
+                "notes": len(body.get("notes") or []),
+                "control_changes": len(body.get("control_changes") or []),
+            }, f, indent=2, sort_keys=True)
+    except Exception:
+        traceback.print_exc()
+
+
 def analyse(body):
     notes, cc = validate(body)
     hand = _requested_hand(body)
@@ -614,6 +657,8 @@ def analyse(body):
             # Il pedale non e' di nessuna delle due mani: vedi HAND_SUSPENDED.
             metrics = tuple(m for m in metrics if m not in HAND_SUSPENDED)
         verdicts = _run_metrics(trace, metrics)
+        if RECORDINGS:
+            keep_recording(body, score, trace, verdicts, factor)
     finally:
         unlink(score)
         unlink(trace)
