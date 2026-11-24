@@ -79,8 +79,11 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({
 
   return (
     <div className="playback-bar" id="playback-bar">
-      {/* Thin progress line at the top of the pill */}
-      {!isTakeActive && !isPractice && (
+      {/* Thin progress line at the top of the pill. Durante la take resta
+          visibile: il valore adesso è vivo (ScorePage lo legge dal player, con
+          ripiego sull'orologio della take) e nasconderlo faceva credere che si
+          riempisse tutta alla fine. In pratica no: lì il brano non scorre. */}
+      {!isPractice && (
         <div className="bar-progress">
           <div className="bar-progress-fill" style={{ width: `${progress}%` }} />
         </div>

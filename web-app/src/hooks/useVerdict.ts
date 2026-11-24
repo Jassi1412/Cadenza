@@ -174,9 +174,16 @@ export function toPerformance(
   const pending = new Map<number, PendingAttack[]>();
   let last = 0;
 
+  // Un attacco che arriva nei millisecondi SUBITO prima del "Go" e' la prima
+  // nota della presa arrivata con un soffio di anticipo: la sorgente MIDI e la
+  // pagina non partono dallo stesso orologio, e scartandola la prima nota dello
+  // spartito restava "never played" (segnalato dall'utente il 2026-11-23 sul
+  // preludio di Chopin). Si tiene, schiacciata su zero. Oltre questa finestra
+  // resta il countdown vero, e quello si scarta come prima.
+  const PRIMA_DEL_GO_MS = 400;
   for (const event of events) {
-    if (event.timestamp < originMs) continue; // prima del brano: e' il countdown
-    const t = event.timestamp - originMs;
+    if (event.timestamp < originMs - PRIMA_DEL_GO_MS) continue; // countdown
+    const t = Math.max(0, event.timestamp - originMs);
     last = t;
     const pitch = event.note;
 

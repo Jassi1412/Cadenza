@@ -7,7 +7,6 @@ import HomePage from './pages/HomePage';
 // actually mounts, instead of on the landing page.
 const UploadPage = lazy(() => import('./pages/UploadPage'));
 const ScorePage = lazy(() => import('./pages/ScorePage'));
-const ZeldaPage = lazy(() => import('./pages/ZeldaPage'));
 
 function App() {
   return (
@@ -21,7 +20,6 @@ function App() {
             <div className="nav-links">
               <Link to="/">Home</Link>
               <Link to="/upload">Upload Score</Link>
-              <Link to="/zelda">Zelda Demo</Link>
             </div>
           </nav>
         </header>
@@ -32,7 +30,6 @@ function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/upload" element={<UploadPage />} />
               <Route path="/score" element={<ScorePage />} />
-              <Route path="/zelda" element={<ZeldaPage />} />
             </Routes>
           </Suspense>
         </main>

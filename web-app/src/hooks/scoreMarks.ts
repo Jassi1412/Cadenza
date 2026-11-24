@@ -30,6 +30,8 @@ export interface ScoreLocation {
    * null = punto indicato a parole ma senza una nota da colorare.
    */
   attack?: number | null;
+  /** il rigo della nota in fallo: 1 = destra, 2 = sinistra */
+  staff?: number;
   /**
    * I numeri nudi dell'errore, allegati dal servizio dove esistono davvero:
    * 'pitch' = il tasto premuto e quello scritto, 'velocity' = le due velocita',
@@ -65,6 +67,10 @@ export interface MarkRule {
 export interface MarkColumn {
   measure: number;
   beat: number;
+  /** il rigo della nota in fallo (1 = destra, 2 = sinistra). Senza, la colonna
+   *  si colora su tutti i righi — ed e' giusto: la regola non sa dire di chi
+   *  era. Quando c'e', la pagina non tocca l'altro rigo. */
+  staff?: number;
   /** l'attacco da raggiungere; null se il servizio non sa dove puntare il dito */
   attack: number | null;
   /** regole, in ordine di comparsa; i dettagli stanno nei campi numerici */
@@ -142,7 +148,10 @@ export function planMarks(verdicts: VerdictsLike, correct?: ScoreLocation[] | nu
       const key = attack !== null ? `a${attack}` : `${l.measure}:${l.beat}`;
       let col = byPos.get(key);
       if (!col) {
-        col = { measure: l.measure, beat: l.beat, attack, rules: [] };
+        col = {
+          measure: l.measure, beat: l.beat, attack, rules: [],
+          ...(l.staff === 1 || l.staff === 2 ? { staff: l.staff } : {}),
+        };
         byPos.set(key, col);
       }
       if (!col.rules.some((r) => r.name === rule)) {
@@ -165,8 +174,14 @@ export function planMarks(verdicts: VerdictsLike, correct?: ScoreLocation[] | nu
   // Il verde passa di qua solo dove il rosso non c'e'. Il servizio l'ha gia'
   // tolto, qui si ricontrolla: un punto con due colori sarebbe peggio di una
   // verifica ripetuta, e un attack duplicato non deve colorare due volte.
+  // Il rosso toglie il verde dallo stesso punto, MA non se il rosso sa su
+  // quale rigo e' caduto: allora l'accordo dell'altra mano e' pulito e va
+  // dipinto verde (la pagina dipinge prima il rosso e poi salta le teste gia'
+  // colorate, quindi non si sovrascrivono).
   const taken = new Set(
-    columns.map((c) => (c.attack !== null ? `a${c.attack}` : `${c.measure}:${c.beat}`)),
+    columns
+      .filter((c) => c.staff !== 1 && c.staff !== 2)
+      .map((c) => (c.attack !== null ? `a${c.attack}` : `${c.measure}:${c.beat}`)),
   );
   const green: GreenSpot[] = [];
   for (const l of Array.isArray(correct) ? correct : []) {

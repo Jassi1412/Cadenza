@@ -54,82 +54,6 @@
   padding: 0 1rem;
 }
 
-/* ── Verdicts ─────────────────────────────────────────── */
-/* I verdetti arrivano gia' calcolati dal servizio RML: qui non c'e' nessuna
-   soglia, si mostra solo quello che Prolog ha risposto. A fine prova il
-   ScorePage NON elenca piu' le sette regole: colora di rosso le note sbagliate
-   dentro lo spartito (vedi paintScoreMarks in ScorePage.tsx) e questo pannello
-   porta solo le righe che LO SPARTITO non puo' dire — i punti rossi sono, e le
-   cose senza una nota da indicare. Lo stile a elenco con ✓/✗ resta qui perche'
-   la pagina dimostrativa /zelda non ha uno spartito giudicato dal vivo e lo
-   usa ancora: non e' il flusso reale, e non va riportato indietro qui. */
-
-.verdict-panel {
-  margin: 2rem auto;
-  padding: 1.5rem 2rem;
-  max-width: 46rem;
-  background: var(--surface, #fff);
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 12px;
-  /* Allineato in fondo dalla barra dei comandi, che è fixed: senza questo
-     scrollIntoView fermerebbe il pannello esattamente sotto di lei. */
-  scroll-margin-bottom: 7rem;
-}
-
-.verdict-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
-}
-
-.verdict-note { color: #6b6b6b; font-size: 0.9rem; margin: 0.25rem 0 1rem; }
-.verdict-error { color: #b3261e; }
-
-/* Le clausole che accompagnano i punti rossi: violazioni senza una nota da
-   indicare, o regole che il monitor non ha proprio iniziato a giudicare. Hanno
-   un colore loro perche' NON sono la localita' dell'errore (quella e' il rosso
-   sullo spartito) e non vanno lette come se lo fossero. */
-.verdict-caveat { color: #8a5a2b; }
-
-/* ── Stile a elenco, solo per la pagina dimostrativa /zelda ── */
-.verdict-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.35rem;
-}
-
-.verdict-list li {
-  display: grid;
-  grid-template-columns: 1.5rem 1fr auto;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.7rem;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  font-size: 0.95rem;
-}
-
-.verdict-ok { background: rgba(76, 175, 80, 0.10); border-color: rgba(76, 175, 80, 0.4); }
-.verdict-bad { background: rgba(179, 38, 30, 0.10); border-color: rgba(179, 38, 30, 0.4); }
-
-.verdict-mark { font-weight: 700; }
-.verdict-ok .verdict-mark { color: #2e7d32; }
-.verdict-bad .verdict-mark { color: #b3261e; }
-
-.verdict-detail { color: #6b6b6b; font-size: 0.85rem; }
-
-/* Forced colors (Windows ad alto contrasto): gli sfondi verde/rosso spariscono,
-   quindi la distinzione la devono portare il segno e il testo, non il colore. */
-@media (forced-colors: active) {
-  .verdict-list li { border-color: CanvasText; background: Canvas; }
-  .verdict-ok .verdict-mark { color: CanvasText; }
-  .verdict-bad .verdict-mark { color: CanvasText; }
-}
-
 /* Override musicxml-player default styles to match our theme */
 .sheet-container .player-sheet {
   background: transparent;
@@ -351,4 +275,106 @@
     padding-left: 1rem;
     padding-right: 1rem;
   }
+}
+
+
+/* La spia della take. Non è un badge: è una lampada da registratore, con il
+   vetro, l'alone e il respiro lento. Ottone quando aspetta, rosso fisso quando
+   incide — lo stesso rosso dei tasti premuti e delle note sbagliate, perché il
+   progetto ha una sola lingua di colori e non se ne aggiunge una quinta. */
+.practice-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.62rem;
+  padding: 0.42rem 0.95rem 0.42rem 0.72rem;
+  border: 1px solid rgba(197, 168, 128, 0.5);
+  border-radius: 2rem;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(248, 241, 231, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8),
+              0 1px 2px rgba(58, 35, 33, 0.06);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #6d5a45;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.practice-status-word { transform: translateY(-0.5px); }
+
+.practice-status-dot {
+  width: 0.58rem;
+  height: 0.58rem;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #eccf74, #b8892a 62%, #8a6218 100%);
+  box-shadow:
+    0 0 0 1px rgba(120, 86, 20, 0.45),
+    0 0 10px 2px rgba(201, 162, 39, 0.5),
+    inset 0 0 2px rgba(255, 255, 255, 0.9);
+  animation: led-breathe 2.6s ease-in-out infinite;
+}
+
+.practice-status-live .practice-status-dot {
+  background: radial-gradient(circle at 35% 30%, #ff8a7a, #c0392b 62%, #7d1f14 100%);
+  box-shadow:
+    0 0 0 1px rgba(120, 30, 20, 0.5),
+    0 0 12px 3px rgba(192, 57, 43, 0.55),
+    inset 0 0 2px rgba(255, 255, 255, 0.85);
+  animation: led-live 1.05s ease-in-out infinite;
+}
+
+@keyframes led-breathe {
+  0%, 100% { opacity: 0.62; }
+  50%      { opacity: 1; }
+}
+
+@keyframes led-live {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .practice-status-dot { animation: none; }
+}
+
+
+/* La spia è una chiave di violino. Il glifo è SMuFL (U+1D11E), lo stesso che
+   la partitura usa per il rigo: viene da Bravura, che l'app carica già per
+   OSMD, quindi non c'è nessun disegno nuovo da introdurre — solo luce. */
+.practice-status-clef {
+  font-family: "Bravura", "Bravura Text", serif;
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-block;
+  color: #b8892a;
+  text-shadow:
+    0 0 1px rgba(255, 236, 170, 0.9),
+    0 0 7px rgba(201, 162, 39, 0.75),
+    0 0 14px rgba(201, 162, 39, 0.35);
+  transform: translateY(0.05em);
+  animation: clef-breathe 2.6s ease-in-out infinite;
+}
+
+.practice-status-live .practice-status-clef {
+  color: #d24b3a;
+  text-shadow:
+    0 0 1px rgba(255, 214, 200, 0.95),
+    0 0 8px rgba(210, 75, 58, 0.8),
+    0 0 16px rgba(210, 75, 58, 0.4);
+  animation: clef-live 1.05s ease-in-out infinite;
+}
+
+@keyframes clef-breathe {
+  0%, 100% { opacity: 0.66; }
+  50%      { opacity: 1; }
+}
+
+@keyframes clef-live {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .practice-status-clef { animation: none; }
 }

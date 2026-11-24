@@ -46,7 +46,6 @@ const ErrorHoverCard: React.FC<ErrorHoverCardProps> = ({ tip, x, y }) => {
 
   return (
     <div ref={ref} className="ehc-card" role="tooltip">
-      <p className="ehc-where">measure {tip.measure} · beat {Math.round(tip.beat * 100) / 100}</p>
       {tip.lines.map((line) => (
         <div className="ehc-line" key={line.rule}>
           <span className="ehc-rule">{line.rule}</span>

@@ -35,6 +35,7 @@ Uso
 """
 import hashlib
 import json
+import time
 import os
 import shutil
 import subprocess
@@ -452,9 +453,11 @@ def _chord_anchor(ids, events):
     for i in ids:
         if not 0 <= i < len(events):
             continue
-        if (events[i].get("expected") or {}).get("chordMates"):
-            out.append(i)
-            continue
+        # La macchina consuma l'accordo e si ferma sul PRIMO evento dell'accordo
+        # DOPO: anche quell'evento ha `chordMates`, quindi fidarsi dell'indice
+        # grezzo accusava l'accordo innocente successivo (23-11-2026: ventaglio
+        # sul secondo accordo, rosso sul terzo). Si torna SEMPRE indietro
+        # all'ultimo attacco con compagni che precede la fermata.
         for j in range(i - 1, -1, -1):
             prev = events[j]
             if (prev.get("type") == "noteon"
@@ -483,6 +486,23 @@ def _locations(ids, events, rule=None):
     """
     if rule == "chord-jitter":
         ids = _chord_anchor(ids, events)
+        # Un accordo e' un ISTANTE, non una nota: la macchina puo' lasciare due
+        # indici sullo stesso attacco, uno per mano, e il secondo diventava un
+        # punto separato con il rigo della sinistra (23-11-2026: l'ottavo
+        # accordo aperto della destra produceva anche un punto 8/9 su due righi
+        # diversi). Si tiene un punto solo, col rigo della mano che ha aperto
+        # l'accordo: il primo, che e' quello dell'attacco.
+        unici = []
+        for i in ids:
+            chord = (events[i].get("expected") or {}).get("chordId")
+            # Una fermata doppia puo' cadere sull'accordo SUBITO dopo quello
+            # aperto: e' lo stesso errore letto due volte dalla macchina, e il
+            # secondo punto accusava un accordo innocente (23-11-2026:
+            # ventaglio sul settimo accordo, rosso anche sull'ottavo).
+            if unici and chord == (events[unici[-1]].get("expected") or {}).get("chordId") + 1:
+                continue
+            unici.append(i)
+        ids = unici
     locs, seen = [], set()
     for i in ids:
         if not 0 <= i < len(events):
@@ -496,8 +516,32 @@ def _locations(ids, events, rule=None):
         if key in seen:
             continue
         seen.add(key)
+        staff = (events[i].get("expected") or {}).get("staff")
+        if rule == "chord-jitter" and attack is not None:
+            # Il rigo va preso dall'ATTACCO, non dalla singola riga della
+            # traccia che la macchina ha fermato: `_chord_anchor` puo' ricadere
+            # sul compagno della sinistra di un accordo aperto dalla destra, e
+            # il rosso finiva sul rigo sbagliato (23-11-2026, Chopin op. 28 n. 20).
+            # L'attacco dichiara molte note: se fra queste c'e' una mano destra,
+            # e' li' che il ventaglio e' stato suonato.
+            righe = {
+                (e.get("expected") or {}).get("staff")
+                for e in events
+                if (e.get("expected") or {}).get("chordId") == attack
+            }
+            if 1 in righe:
+                staff = 1
         loc = {"measure": measure, "beat": beat,
                "attack": attack if isinstance(attack, int) else None}
+        # Il rigo si dichiara solo quando il difetto appartiene a UNA nota:
+        # altezza, articolazione, dinamica, tempo. L'accordo aperto e il pedale
+        # riguardano invece l'attacco intero: dichiarando il rigo, la pagina
+        # colora una mano sola e le note dell'altra restavano NERE (segnalato
+        # dall'utente il 2026-11-23 sul preludio di Chopin: accordi da sei note,
+        # un punto rosso per accordo e cinque teste nere accanto).
+        SENZA_RIGO = {"pedal-toggle", "syncopated-pedal"}
+        if staff in (1, 2) and rule not in SENZA_RIGO:
+            loc["staff"] = staff
         detail = _detail_for(rule, events[i])
         if detail:
             loc.update(detail)
@@ -522,6 +566,21 @@ def read_tempo_factor(body):
     if not np.isfinite(f) or f <= 0:
         return 1.0
     return f
+
+
+def riassunto_spartito(xml):
+    """Cosa contiene lo spartito che il browser ha appena mandato.
+
+    Senza questa riga, quando il verdetto non torna non si sa se il difetto e'
+    nella musica, nel modello o nella copia di spartito che vive nella pagina.
+    """
+    import re as _re
+    misure = len(_re.findall(r"<measure\s", xml))
+    stacc = len(_re.findall(r"<staccato", xml))
+    legato = len(_re.findall(r"<slur|<legato", xml))
+    titolo = _re.findall(r"<work-title>([^<]*)</work-title>", xml)
+    return "misure=%d staccato=%d legato=%d titolo=%r" % (
+        misure, stacc, legato, titolo[0] if titolo else "")
 
 
 def validate(body):
@@ -794,6 +853,12 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n))
 
             path = self.path.split("?")[0].rstrip("/") or "/"
+            if isinstance(body.get("score"), str):
+                # su file, non su stdout: il servizio gira in background e la
+                # sua console non e' dove si guarda quando un verdetto non torna
+                with open("repertoir/takes/spartiti.log", "a", encoding="utf-8") as _f:
+                    _f.write("%s %s\n" % (time.strftime("%H:%M:%S"),
+                                           riassunto_spartito(body["score"])))
             if path == "/hands":
                 # Cosa questo spartito permette di separare, SENZA costruire il
                 # piano dei passi: alla presa intera serve solo per disegnare L e
@@ -847,10 +912,23 @@ class Handler(BaseHTTPRequestHandler):
             # mai stata suonata" sarebbe una seconda voce che dice la stessa
             # cosa in un altro modo — la coppia di numeri li' ha gia' detto tutto.
             late, missed, correct = coverage(model, notes, factor)
+            # Un punto rosso toglie il verde dallo STESSO punto. Ma se la
+            # regola sa dire su QUALE rigo e' caduta (articolazione sul G4 della
+            # destra), l'attacco non e' tutto sbagliato: l'accordo che la
+            # sinistra suona nello stesso istante e' stato suonato bene, e
+            # lasciarlo nero vorrebbe dire "non giudicato" sopra una nota che
+            # nessuna regola ha accusato. Quei punti restano nel verde: la
+            # pagina dipinge prima il rosso e poi il verde solo sulle teste
+            # rimaste.
             red = set()
+            red_rigo = set()
             for v in payload.values():
                 for l in v.get("locations", []):
-                    red.add(_loc_key(l))
+                    chiave = _loc_key(l)
+                    if l.get("staff") in (1, 2):
+                        red_rigo.add(chiave)
+                    else:
+                        red.add(chiave)
             # "never played" tace dove un rosso c'e' gia': li' la coppia di
             # numeri RML ha gia' detto tutto, e una seconda voce che dice
             # "mancava anche questa" sarebbe rumore sopra la stessa nota.
@@ -866,7 +944,8 @@ class Handler(BaseHTTPRequestHandler):
             if missed:
                 payload["never played"] = {"ok": False, "exit": 1, "locations": missed}
                 red.update(_loc_key(l) for l in missed)
-            correct = [l for l in correct if _loc_key(l) not in red]
+            correct = [l for l in correct
+                       if _loc_key(l) not in red or _loc_key(l) in red_rigo]
 
             answer = {
                 "events": len(events),

@@ -93,3 +93,60 @@
   gap: 0.6rem;
   margin-top: 1.2rem;
 }
+
+/* Le sette regole, sotto il numero. Cliccabili una per volta: la carta resta
+   piccola finché non si chiede il perché, e chi non vuole leggere non legge. */
+.pc-rules {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  text-align: left;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.pc-rule { border-top: 1px solid rgba(197, 168, 128, 0.25); }
+.pc-rule:last-child { border-bottom: 1px solid rgba(197, 168, 128, 0.25); }
+
+.pc-rule-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.2rem;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.pc-rule-head:hover { background: rgba(197, 168, 128, 0.1); }
+
+.pc-rule-name { flex: 1; font-size: 0.92rem; }
+
+.pc-rule-word { font-size: 0.78rem; letter-spacing: 0.02em; text-transform: lowercase; }
+
+.pc-rule-pass .pc-rule-word { color: #2e7d32; }
+.pc-rule-fail .pc-rule-word { color: #b3261e; }
+.pc-rule-broken .pc-rule-word { color: #6a4c93; }
+
+.pc-rule-caret { width: 1ch; opacity: 0.5; font-size: 0.85rem; }
+
+.pc-rule-body {
+  padding: 0.2rem 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #555);
+}
+
+.pc-rule-body p { margin: 0 0 0.35rem; }
+
+.pc-rule-label {
+  margin-top: 0.5rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}

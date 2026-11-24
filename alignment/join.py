@@ -107,6 +107,30 @@ class ScoreModel:
             if n["articulation"] and n["onset"] not in self._art:
                 self._art[n["onset"]] = n["articulation"]
 
+    def staff_of(self, beat, pitch=None):
+        """Il rigo della nota scritta che corrisponde a questa battuta.
+
+        Con `pitch` si sceglie la nota GIUSTA fra quelle che partono insieme:
+        su un attacco ci possono essere tre note su due righi (accordo della
+        sinistra piu' la melodia della destra), e prendere la prima dava il
+        rigo sbagliato due volte su tre — l'errore finiva colorato sul rigo
+        che non c'entrava.
+        """
+        if not self._onsets:
+            return None
+        i = bisect.bisect_right(self._onsets, beat) - 1
+        if i < 0:
+            return None
+        gruppo = [n for n in self.notes if n["onset"] == self._onsets[i]]
+        if pitch is not None:
+            for n in gruppo:
+                if n["pitch"] == pitch:
+                    return n.get("staff")
+        for n in gruppo:
+            if n.get("staff") is not None:
+                return n.get("staff")
+        return None
+
     def articulation_at(self, beat):
         """Il cartiglio che lo spartito mette su questa battuta, se lo mette.
 
@@ -137,38 +161,53 @@ class ScoreModel:
         beat_grad = float(part.beat_map(1.0)) - float(part.beat_map(0.0))
         assert beat_grad > 0, "conversione t -> beat non riuscita"
 
-        # note
-        na = part.note_array()
-        by_id = {str(r["id"]): r for r in na}
+        # note — di TUTTE le parti, non solo della prima.
+        #
+        # Uno spartito di pianoforte può essere scritto come due parti separate,
+        # una per mano, invece che come una parte con due righi. Leggendo solo
+        # `score[0]` il motore giudicava metà esecuzione: le note dell'altra mano
+        # non erano attese da nessuno e risultavano tasti sbagliati.
+        #
+        # L'id porta l'indice della parte, perché due parti possono usare gli
+        # stessi id. Tempo, dinamiche e pedali restano presi dalla prima parte:
+        # sono proprietà della pagina, non della mano.
         notes = []
-        for n in part.notes:
-            r = by_id.get(str(n.id))
-            if r is None:
-                continue
-            # il cartiglio di staccato o tenuto e' gia' sulla nota: partitura lo
-            # legge, e lo mette qui. Non e' nella tabella delle note, dove non
-            # c'e' una colonna per le articolazioni, quindi va preso dagli
-            # oggetti nota e non dalle righe.
-            nota = {
-                "id": str(n.id),
-                "pitch": int(r["pitch"]),
-                "onset": float(r["onset_beat"]),
-                "duration": float(r["duration_beat"]),
-                "voice": int(r["voice"]) if "voice" in r.dtype.names else 0,
-                "articulation": str(n.articulations[0]) if n.articulations else None,
-            }
-            notes.append(nota)
+        for indice_parte, parte_corrente in enumerate(score.parts):
+            na = parte_corrente.note_array()
+            by_id = {str(r["id"]): r for r in na}
+            for n in parte_corrente.notes:
+                r = by_id.get(str(n.id))
+                if r is None:
+                    continue
+                # il cartiglio di staccato o tenuto e' gia' sulla nota: partitura
+                # lo legge, e lo mette qui. Non e' nella tabella delle note, dove
+                # non c'e' una colonna per le articolazioni, quindi va preso dagli
+                # oggetti nota e non dalle righe.
+                nota = {
+                    "id": "%d:%s" % (indice_parte, n.id),
+                    "pitch": int(r["pitch"]),
+                    "onset": float(r["onset_beat"]),
+                    "duration": float(r["duration_beat"]),
+                    "voice": int(r["voice"]) if "voice" in r.dtype.names else 0,
+                    "articulation": str(n.articulations[0]) if n.articulations else None,
+                    "part": indice_parte,
+                }
+                notes.append(nota)
         notes.sort(key=lambda x: (x["onset"], x["pitch"]))
         cls._propagate_articulations(notes)
 
         # legature: anche la <slur> sta nel file, non nelle colonne di partitura.
         # Una nota dentro una legatura deve IL suo suono fino all'attacco dopo:
         # lo spartito lo chiede, e il cartiglio atteso diventa "legato".
-        for span in cls._read_slurs(path, part):
-            for n in notes:
-                if (span["start"] - 0.02 <= n["onset"] < span["end"] - 0.02
-                        and n["articulation"] in (None, "tenuto")):
-                    n["articulation"] = "legato"
+        # Le legature si leggono parte per parte e si applicano solo alle note di
+        # quella parte: un'arcata sulla destra non riguarda la sinistra.
+        for indice_parte, parte_corrente in enumerate(score.parts):
+            for span in cls._read_slurs(path, parte_corrente):
+                for n in notes:
+                    if (n.get("part") == indice_parte
+                            and span["start"] - 0.02 <= n["onset"] < span["end"] - 0.02
+                            and n["articulation"] in (None, "tenuto")):
+                        n["articulation"] = "legato"
 
         # Mani: la <voice> e' cio' che separa le due mani, il <staff> dice quale
         # rigo porta. partitura ha la voce per ogni riga della sua tabella, quindi
@@ -232,7 +271,7 @@ class ScoreModel:
             n["expected_dyn"] = e["dyn"]
             n["expected_pedal"] = e["pedal"]
 
-        time_anchors = cls._build_time_anchors(part, path, beat_grad)
+        time_anchors = cls._build_time_anchors(part, path, beat_grad, getattr(score, "parts", [part]))
 
         return cls(notes, dynamics, pedals, beat_grad, time_anchors)
 
@@ -271,7 +310,7 @@ class ScoreModel:
         return out
 
     @classmethod
-    def _build_time_anchors(cls, part, path, beat_grad):
+    def _build_time_anchors(cls, part, path, beat_grad, parti=None):
         """(beat, ms) agli angoli del tempo scritto.
 
         Il MusicXML non ha orari assoluti: ha battute e un tempo. Il tempo e' un
@@ -337,7 +376,14 @@ class ScoreModel:
 
         # quarter_durations puo' non arrivare al fondo del brano: mi fermo dove
         # finisce l'ultima nota, altrimenti l'ultimo tratto non avrebbe tempo.
-        end_t = max(float(n.start.t) + float(n.duration) for n in part.notes)
+        #
+        # L'ultima nota va cercata in TUTTE le parti: in uno spartito scritto a
+        # due parti la prima può finire prima della seconda, e una mappa che si
+        # ferma lì tronca la coda. Si vedeva come un ultimo accordo schiacciato
+        # a 30 ms, un sobbalzo fuori tempo che nel playback dello spartito non
+        # c'è perché lì il tempo lo dà il motore, non questa mappa.
+        fine = [float(n.start.t) + float(n.duration) for p in (parti or [part]) for n in p.notes]
+        end_t = max(fine) if fine else float(prev)
         ms += ms_between(prev, end_t)
         end_beat = _beat_of(part, end_t)
         # senza questo l'ultimo angolo finirebbe prima dell'ultima nota e tutto
@@ -345,6 +391,15 @@ class ScoreModel:
         # conosciuto: 55 attacchi di fila con lo stesso istante, verificato.
         if end_beat is not None:
             anchors.append((end_beat, ms))
+
+        # E oltre l'ultima nota la mappa continua con la stessa pendenza, così
+        # una nota che comincia sull'ultimo istante ha comunque una durata.
+        if len(anchors) >= 2:
+            (b0, m0), (b1, m1) = anchors[-2], anchors[-1]
+            pendenza = (m1 - m0) / (b1 - b0) if b1 > b0 else 600.0
+        else:
+            pendenza = 600.0
+        anchors.append((anchors[-1][0] + 16.0, anchors[-1][1] + pendenza * 16.0))
         return anchors
 
     def beat_at(self, score_ms):
@@ -421,8 +476,15 @@ class ScoreModel:
                     if d:
                         cursor -= float(d)
                 elif child.tag == "direction":
+                    # <offset> sposta il segno rispetto al punto raggiunto dal
+                    # cursore. Serve quando il pedale cambia DENTRO una nota che
+                    # dura oltre: senza, il segno viene letto alla fine della
+                    # nota e la span si gonfia di un battito (Preludio op. 28
+                    # n. 7, dove il pedale cambia su un accordo tenuto).
+                    spostamento = child.findtext("offset")
+                    spostamento = float(spostamento) if spostamento else 0.0
                     for p in child.findall(".//pedal"):
-                        at = _beat_of(part, offset + cursor)
+                        at = _beat_of(part, offset + cursor + spostamento)
                         if at is None:
                             continue
                         if p.get("type") == "start":
@@ -869,6 +931,10 @@ def join(model, performed_notes, tempo_factor=1.0, control_changes=None):
             # deve poter distinguere "qui e' scritto staccato" da "qui non c'e'
             # niente scritto", come fa per la dinamica.
             "art": model.articulation_at(beat),
+            # Il rigo (1 = destra, 2 = sinistra). Serve alla pagina: un errore
+            # sul Do4 della destra non deve diventare rosso sull'accordo che la
+            # sinistra suona nello stesso istante — stessa colonna, rigo diverso.
+            "staff": model.staff_of(beat, near_pitch),
         }
 
         # ATTACCO fuori da ogni nota attiva dello spartito (una nota in piu'

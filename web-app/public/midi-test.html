@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Prova MIDI</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; }
+  h1 { font-size: 1.2rem; }
+  #stato { font-size: 2rem; font-weight: 700; margin: 1rem 0; }
+  #log { font-family: ui-monospace, monospace; font-size: 13px;
+         white-space: pre-wrap; max-height: 60vh; overflow: auto;
+         background: #f4f4f4; padding: 1rem; border-radius: 6px; }
+  .ok { color: #1a7f37; } .bad { color: #a11; }
+</style>
+</head>
+<body>
+<h1>Prova MIDI — questa pagina non giudica, conta soltanto</h1>
+<div id="stato">in attesa…</div>
+<div id="log">apertura dell'accesso MIDI…</div>
+<script>
+const stato = document.getElementById('stato');
+const log = document.getElementById('log');
+let n = 0;
+function stampa(testo) {
+  log.textContent = testo + '\n' + log.textContent;
+}
+navigator.requestMIDIAccess().then(access => {
+  const nomi = [...access.inputs.values()].map(i => i.name);
+  stato.textContent = nomi.length + ' ingressi visibili';
+  stato.className = nomi.length ? 'ok' : 'bad';
+  stampa('ingressi: ' + (nomi.join(', ') || 'NESSUNO'));
+  for (const input of access.inputs.values()) {
+    input.onmidimessage = e => {
+      const [cmd, note, vel] = e.data;
+      n += 1;
+      stato.textContent = n + ' messaggi ricevuti';
+      stato.className = 'ok';
+      if (n <= 400) {
+        const tipo = (cmd & 0xf0) === 0x90 && vel > 0 ? 'noteon' :
+                     (cmd & 0xf0) === 0x80 || ((cmd & 0xf0) === 0x90 && vel === 0) ? 'noteoff' :
+                     (cmd & 0xf0) === 0xb0 ? 'cc' : 'altro';
+        stampa(tipo + '  nota ' + note + '  valore ' + vel + '  (' + input.name + ')');
+      }
+    };
+  }
+  access.onstatechange = e => stampa('stato: ' + e.port.name + ' -> ' + e.port.state);
+}).catch(err => {
+  stato.textContent = 'accesso negato';
+  stato.className = 'bad';
+  stampa('errore: ' + err.name + ' ' + err.message);
+});
+</script>
+</body>
+</html>

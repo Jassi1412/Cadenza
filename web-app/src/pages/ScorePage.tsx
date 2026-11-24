@@ -344,11 +344,18 @@ function paintScoreMarks(
   }
 
   let pos = -1;
+  // Fermate VERDI che il cursore non riesce a raggiungere. L'iteratore di OSMD
+  // si ferma prima dell'ultimo attacco sull'ultima battuta, e quelle teste
+  // restavano nere mentre tutte le altre erano verdi: non era il verdetto (il
+  // servizio manda quegli attacchi fra i corretti) né la chiusura della carta,
+  // ma la corsa che finiva un passo prima della fine.
+  const coda: number[] = [];
   for (const { col, attack } of walk) {
     pos = moveCursorToStep(osmd, attack, pos);
     if (pos < attack) {
       // la fermata non c'è (brano più corto del previsto, o iteratore rotto)
       if (col) missed.push(...col.rules.map((r) => r.name));
+      else coda.push(attack);
       continue;
     }
     // moveCursorToStep ha già reso il cursore visibile su questo punto: la sua
@@ -385,7 +392,19 @@ function paintScoreMarks(
         top = Math.min(top, r.top);
         bottom = Math.max(bottom, r.bottom);
       }
+      // La misura intera e' troppo alta: dentro ci stanno note di ATTACCHI
+      // diversi, e colorarle tutte dava una nota verde in mezzo alle rosse e
+      // gli accordi della sinistra rossi quando il verdetto li diceva puliti.
+      // Si tiene la banda del cursore, allargata solo quel tanto che basta a
+      // prendere l'accordo che parte Li', non l'intera battuta.
       if (Number.isFinite(top) && Number.isFinite(bottom)) {
+        // La banda è quella della MISURA, non dell'immagine del cursore. Il
+        // cursore è più corto del sistema e tagliava le note più gravi: su
+        // questi accordi larghi la nota più bassa di ognuno restava nera
+        // (segnalato dall'utente il 2026-11-23, Chopin op. 28 n. 20). Il
+        // rischio dichiarato qui sopra — prendere note di attacchi diversi —
+        // lo contiene già il filtro orizzontale sull'accordo qualche riga più
+        // giù, che scarta tutto ciò che non sta sulla colonna del cursore.
         bandTop = top;
         bandBottom = bottom;
       }
@@ -400,7 +419,11 @@ function paintScoreMarks(
     // Con una mano sola il verdetto e' DELLA MANO, non della colonna: sul
     // Warmup il primo attacco e' insieme Do4 (destra) e accordo di sinistra,
     // e la colonna intera prendeva anche il verde della sinistra.
-    const wantedStaff = staffForHand(hand);
+    //
+    // Se la colonna dichiara il PROPRIO rigo vale quello, e vince sulla mano:
+    // una violazione sul G4 della destra non deve diventare rossa sull'accordo
+    // che la sinistra suona nello stesso istante. Stessa colonna, rigo diverso.
+    const wantedStaff = col?.staff === 1 || col?.staff === 2 ? col.staff : staffForHand(hand);
     const heads: NoteheadHit[] = [];
     for (const h of document.querySelectorAll<SVGGElement>('#sheet-container g.vf-notehead')) {
       const r = h.getBoundingClientRect();
@@ -419,18 +442,27 @@ function paintScoreMarks(
     }
     if (!heads.length) {
       if (col) missed.push(...col.rules.map((r) => r.name));
+      else coda.push(attack);
       continue;
     }
 
-    // spazio fra colonne vicine: è lui la tolleranza, non un numero assoluto
+    // Spazio fra ATTACCHI vicini: è lui la tolleranza, non un numero assoluto.
+    // La MEDIANA, non il minimo: una nota ritardata di 90 ms disegna la sua
+    // testa 11px a lato del resto dell'accordo, creando un minimo spurio che
+    // restringeva la finestra e la lasciava fuori dal proprio accordo — restava
+    // verde mentre le sue compagne erano rosse (23-11-2026, misurato con la
+    // sonda headless). La mediana ignora quell'outlier.
     const xs = [...new Set(heads.map((h) => Math.round(h.cx * 2) / 2))].sort((a, b) => a - b);
-    let gap = Infinity;
+    const distanze = [];
     for (let i = 1; i < xs.length; i++) {
       const d = xs[i] - xs[i - 1];
-      if (d > 3 && d < gap) gap = d;
+      if (d > 3) distanze.push(d);
     }
-    if (!Number.isFinite(gap)) gap = 90; // unica colonna in vista: margine largo
-    const accept = Math.min(gap * 0.55, 45);
+    distanze.sort((a, b) => a - b);
+    const gap = distanze.length
+      ? distanze[Math.floor(distanze.length / 2)]
+      : 90;                                  // unica colonna in vista: margine largo
+    const accept = Math.min(gap * 0.49, 70);
 
     let best: NoteheadHit | null = null;
     let bestD = Infinity;
@@ -443,11 +475,33 @@ function paintScoreMarks(
     }
     if (!best || bestD > accept) {
       if (col) missed.push(...col.rules.map((r) => r.name));
+      else coda.push(attack);
       continue;
     }
 
-    // l'accordo intero: tutte le teste alla stessa ascissa della scelta migliore
-    const cluster = Math.max(3, gap * 0.3);
+    // L'ACCORDO: solo le teste che stanno ESATTAMENTE su quest'attacco.
+    // `gap*0.3` (27 px qui) inghiottiva la nota verde vicina e gli accordi
+    // della mano sinistra che cadono alla stessa ascissa: si coloravano di
+    // rosso note che il verdetto aveva dichiarato pulite. Un accordo ha le
+    // teste tutte alla STESSA x, quindi basta una tolleranza di pochi pixel.
+    // L'ACCORDO: solo le teste che stanno su quest'attacco.
+    //
+    // Qui la tolleranza era fissa a 4 px, perché in un accordo stretto le teste
+    // stanno tutte alla stessa ascissa. Non è vero per gli accordi larghi: sopra
+    // le cinque note OSMD sposta qualche testa di una decina di pixel per non
+    // farla collidere, e con 4 px quelle teste restavano NERE dopo il verdetto
+    // (segnalato dall'utente il 2026-11-23 sul preludio di Chopin: accordi da
+    // sei e sette note, solo la testa più vicina al cursore si colorava). La
+    // tolleranza ora è proporzionale allo spazio fra due attacchi — un quarto —
+    // con un tetto: resta molto sotto la metà che separa due attacchi vicini,
+    // quindi non può inghiottire la colonna successiva.
+    // La ricerca di `best` ha gia' scartato le teste fuori dalla banda della
+    // misura. Qui si prende TUTTO cio' che resta nella banda, senza un altro
+    // taglio orizzontale: le teste di un accordo largo possono stare a x diverse
+    // anche di 40 px, e un cluster piu' stretto ne lasciava qualcuna nera
+    // (23-11-2026, nota centrale nera in un accordo di cinque). L'intervallo fra
+    // due attacchi e' gia' il limite: `accept` l'ha misurato qui sopra.
+    const cluster = accept;
     // la card d'hover si prepara UNA per la colonna e vale per tutte le teste
     // dell'istessa istante: è lo stesso errore visto da due righi. Il verde
     // non ha niente da raccontare e nella mappa delle punte non ci entra mai:
@@ -456,6 +510,11 @@ function paintScoreMarks(
     let any = false;
     for (const h of heads) {
       if (Math.abs(h.cx - best.cx) > cluster) continue;
+      // Il rosso e il verde possono cadere sullo stesso attacco su righi
+      // diversi (errore di articolazione sulla destra, accordo di sinistra
+      // pulito). Il rosso passa per primo: qui non si ricopre quello che e'
+      // gia' stato dipinto, o l'accordo tornerebbe verde sopra il rosso.
+      if (state.heads.includes(h.el)) continue;
       paintNotehead(h.el, state, col ? MARK_RED : MARK_GREEN);
       if (col && tip) markTips.set(h.el, tip);
       state.heads.push(h.el);
@@ -469,6 +528,71 @@ function paintScoreMarks(
     // lo scorrimento porta al primo errore, non alla prima nota verde: chi ha
     // sbagliato deve vedere il proprio errore per primo.
     if (col) firstEl ??= best.el;
+  }
+
+  // LA CODA. Il cursore di OSMD si ferma un attacco prima della fine, quindi le
+  // ultime fermate verdi non venivano dipinte e restavano nere in mezzo alle
+  // altre: l'ultima battuta e l'ultima nota della penultima, esattamente ciò che
+  // si vedeva. Il verdetto non c'entra — il servizio manda quegli attacchi fra i
+  // corretti — ed è la corsa a finire corta.
+  //
+  // Qui si colorano le teste ancora non dipinte dell'ULTIMA misura disegnata,
+  // che è dove quelle fermate stanno. Si tocca solo il verde: un punto che il
+  // servizio ha dichiarato corretto non può diventare un'accusa.
+  // Un attacco puo' avere piu' teste di quante il cursore ne visiti: qui il
+  // servizio dichiara 106 corretti e zero rossi, ma dodici teste restavano nere.
+  // Se NON c'e' nessun rosso, qualunque testa non dipinta e' per forza verde.
+  // Con rossi presenti non si inventa niente: una testa non raggiunta non ha
+  // colore onesto da prendere.
+  // Se OGNI colonna rossa ha trovato le sue teste (`missed` vuoto), il servizio
+  // ha coperto tutti gli attacchi: rosso dove ha accusato, verde dove ha
+  // dichiarato corretto. Quindi qualunque testa ancora nera è verde, anche se il
+  // cursore non si è fermato su di essa — succede ai sedicesimi in una voce
+  // secondaria, che l'iteratore di OSMD salta e che restavano neri in mezzo agli
+  // accordi (misurato con la sonda sul preludio di Chopin, 23-11-2026: due teste
+  // a 11px dall'accordo dopo, entrambe dichiarate corrette). Non si inventa
+  // niente: se una colonna rossa non è stata dipinta, `missed` non è vuoto e la
+  // chiusura non scatta — un attacco accusato non può diventare verde.
+  if (missed.length === 0 && (green?.length ?? 0) > 0) {
+    for (const h of document.querySelectorAll<SVGGElement>('#sheet-container g.vf-notehead')) {
+      if (state.heads.includes(h)) continue;
+      paintNotehead(h, state, MARK_GREEN);
+      state.heads.push(h);
+      painted++;
+    }
+  } else if (coda.length) {
+    const numeri = [...measures.keys()]
+      .map((k) => Number(k))
+      .filter((n) => Number.isFinite(n));
+    if (numeri.length) {
+      // Le ultime DUE MISURE IN FONDO AL DOCUMENTO, non col numero più alto:
+      // qui i numeri di misura si ripetono fra i due righi e salgono a 30, mentre
+      // l'incisione ne mostra 15. Prendere il numero massimo (30) non trovava
+      // niente, e le teste finali restavano nere.
+      const inFondo = [...document.querySelectorAll<SVGGElement>('#sheet-container g.vf-measure')]
+        .slice(-4);
+      const gia = new Set(state.heads);
+      const mano = staffForHand(hand);
+      for (const g of inFondo) {
+        for (const h of g.querySelectorAll<SVGGElement>('g.vf-notehead')) {
+          if (gia.has(h)) continue;
+          if (mano !== null) {
+            const n = /-(\d+)$/.exec(h.closest('g.staffline')?.id ?? '');
+            if (!n || Number(n[1]) !== mano) continue;
+          }
+          paintNotehead(h, state, MARK_GREEN);
+          state.heads.push(h);
+          painted++;
+        }
+      }
+    }
+  }
+
+  // Diagnostica in sviluppo: quante fermate non sono state raggiunte. Serve a
+  // distinguere "il cursore si ferma corto" da "la banda non trova le teste",
+  // che sono due difetti diversi e si vedono solo contando.
+  if (import.meta.env.DEV && coda.length) {
+    console.warn('[segni] fermate verdi non raggiunte:', coda.length, '| teste dipinte:', painted);
   }
 
   // Il cursore aveva finito di servire: fuori dal playback e fuori dalla pratica
@@ -850,6 +974,21 @@ const ScorePage: React.FC = () => {
   // la richiesta del 2026-11-10 vuole una card nel tema del sito.
   const [tipHover, setTipHover] = useState<{ x: number; y: number; tip: MarkTip } | null>(null);
 
+  // L'identità del verdetto, per il solo scopo di far girare l'effetto che
+  // dipinge. `verdict.verdicts` e `verdict.correct` sono oggetti nuovi a ogni
+  // render, e messi nelle dipendenze facevano RIDIPINGERE la tela a ogni
+  // cambiamento di stato della pagina — per esempio alla chiusura della carta.
+  // Il ridisegno riparte da capo e, camminando col cursore, le ultime fermate
+  // restavano indietro: l'ultima battuta e l'ultima nota della penultima
+  // tornavano nere davanti agli occhi. Qui la chiave cambia solo quando cambia
+  // il verdetto davvero.
+  const verdictKey = useMemo(() => {
+    if (verdict.status !== 'done' || !verdict.verdicts || isPractice) {
+      return `idle|${verdict.status}|${isPractice ? 'pratica' : 'presa'}`;
+    }
+    return `${verdict.hand ?? 'both'}|${JSON.stringify(verdict.verdicts)}|${JSON.stringify(verdict.correct ?? [])}`;
+  }, [verdict.status, verdict.verdicts, verdict.correct, verdict.hand, isPractice]);
+
   useEffect(() => {
     clearScoreMarks(marksRef.current);
     marksRef.current = null;
@@ -865,7 +1004,10 @@ const ScorePage: React.FC = () => {
       // punteggio arriva da sola davanti agli occhi, dove lo sguardo sta già.
       out.firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [verdict.status, verdict.verdicts, verdict.correct, verdict.hand, isPractice]);
+    // Dipende dalla sola chiave: rifare il disegno a ogni render è ciò che
+    // cancellava le ultime due macchie. Vedi il commento su verdictKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verdictKey]);
 
   /** Il voto 0-100 della carta centrata — lo decide `performanceScore`, qui si legge e basta. */
   const scoreOutcome = useMemo(
@@ -936,6 +1078,33 @@ const ScorePage: React.FC = () => {
       });
     }
   }, [midiEnabled, midiInputId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Aggiornamento della barra di avanzamento. Prima non esisteva: la pagina
+  // scriveva `progress` solo a 0 quando si entrava in pratica e a 100 alla fine
+  // della take, per questo la barra restava ferma e si riempiva di colpo.
+  // Il valore viene dal player, che è l'unica cosa che sa dove siamo.
+  useEffect(() => {
+    // Durante la take la pagina non usa `isPlaying` ma `phase`: con la sola
+    // `isPlaying` il ciclo non partiva mai e la barra restava a zero.
+    if (!isPlaying && phase !== 'playing' && phase !== 'countdown') return;
+    let raf = 0;
+    const tick = () => {
+      const p = playerRef.current as unknown as { position?: number; duration?: number } | null;
+      const pos = p?.position;
+      const dur = p?.duration;
+      if (typeof pos === "number" && typeof dur === "number" && dur > 0 && pos > 0) {
+        setProgress(Math.max(0, Math.min(100, (pos / dur) * 100)));
+      } else if (dur && dur > 0 && takeStartRef.current) {
+        // Ripiego: il player non dice dove siamo, ma la take ha un orologio
+        // suo — `takeStartRef`, fissato sul "Go" del countdown.
+        const trascorso = performance.now() - takeStartRef.current;
+        setProgress(Math.max(0, Math.min(100, (trascorso / dur) * 100)));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, phase]);
 
   /** Fine della prova: lo spartito si ferma e il verdetto parte da solo. */
   const finishPlayAlong = useCallback(async () => {
@@ -1219,6 +1388,18 @@ const ScorePage: React.FC = () => {
         const osmd = (renderer as any).osmd || (renderer as any)._osmd;
         if (osmd) {
           osmdRef.current = osmd;
+          // Aggancio di prova, solo in sviluppo: la sonda in alignment/ dipinge
+          // gli attacchi e legge quali teste restano nere. Senza, quella
+          // verifica richiederebbe di modificare la risposta HTTP del modulo.
+          if (import.meta.env.DEV) {
+            (window as unknown as Record<string, unknown>).__osmd = osmd;
+            (window as unknown as Record<string, unknown>).__marks = {
+              paint: paintScoreMarks,
+              clear: clearScoreMarks,
+              plan: planMarks,
+              staff: staffForHand,
+            };
+          }
           console.log('[ScorePage] OSMD instance acquired. Cursors:', osmd.cursors?.length ?? 0);
 
           // Rimosso l'override manuale forzato - ci affidiamo al comportamento naturale di OSMD
@@ -1274,6 +1455,18 @@ const ScorePage: React.FC = () => {
     const player = playerRef.current;
     if (player) player.velocity = bpm / scoreBpm;
   }, [bpm, scoreBpm, phase]);
+
+  // Aggancio di sviluppo per l'automazione delle take: con ?autoplay=1 la presa
+  // parte da sola. Serve perché il riproduttore MIDI deve sapere quando comincia
+  // il countdown, e nessuno deve premere un pulsante a coordinate sullo schermo.
+  const autoplayDoneRef = useRef(false);
+  useEffect(() => {
+    if (autoplayDoneRef.current) return;
+    if (!/[?&]autoplay=1\b/.test(window.location.search)) return;
+    if (phase !== 'idle') return;
+    autoplayDoneRef.current = true;
+    void handlePlayAlong();
+  }, [phase, handlePlayAlong]);
 
   const handlePlayPause = useCallback(() => {
     const player = playerRef.current;
@@ -1358,9 +1551,11 @@ const ScorePage: React.FC = () => {
         </button>
 
         {(phase === 'countdown' || phase === 'playing') && (
-          <div className="practice-status">
-            <span className="practice-status-dot" />
-            {phase === 'countdown' ? 'Ready…' : 'Take in progress'}
+          <div className={"practice-status" + (phase === 'playing' ? " practice-status-live" : "")}>
+            <span className="practice-status-clef" aria-hidden="true">𝄞</span>
+            <span className="practice-status-word">
+              {phase === 'countdown' ? 'Ready' : 'Take in progress'}
+            </span>
           </div>
         )}
       </div>
@@ -1472,7 +1667,6 @@ const ScorePage: React.FC = () => {
                  style={{ animationDuration: `${COUNTDOWN_STEP_MS}ms` }}>
               {count > 0 ? count : 'Go'}
             </div>
-            <p className="countdown-hint">Get ready, starting shortly</p>
           </div>
         )}
       </div>
@@ -1483,6 +1677,7 @@ const ScorePage: React.FC = () => {
           restano visibili dietro e intorno a dirne il dove. */}
       {!isPractice && verdict.status !== 'idle' && !cardDismissed && (
         <PerformanceCard
+              verdicts={verdict.verdicts}
           status={verdict.status}
           error={verdict.error}
           outcome={scoreOutcome}
